@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Inzo">
+  <!--
+    Two paths, mirror images of each other. Each is one agent: its own track,
+    plus its half of the handoff between them. They reach toward each other
+    and stop short — the gap is the human approval gate, the seam the whole
+    product is built around. Together they read as the Z in "inzo".
+
+    Butt caps and miter joins on purpose: precise and engineered, not soft.
+    Uses currentColor so one file works on light and dark.
+  -->
+  <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M17 17 H47 L35.89 28.11" />
+    <path d="M28.11 35.89 L17 47 H47" />
+  </g>
+</svg>

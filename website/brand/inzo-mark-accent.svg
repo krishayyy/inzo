@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Inzo">
+  <!--
+    Two-tone variant. Colour only reinforces the two sides; the geometry
+    already carries the meaning, so this degrades correctly to the monochrome
+    mark in print, in a favicon, or for anyone who cannot distinguish the hues.
+  -->
+  <g fill="none" stroke-width="7" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M17 17 H47 L35.89 28.11" stroke="#0f141c" />
+    <path d="M28.11 35.89 L17 47 H47" stroke="#b88000" />
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Inzo">
+  <!--
+    Filled badge for app icons, social avatars, and OG images, where the mark
+    needs its own ground instead of borrowing the page's.
+  -->
+  <rect width="128" height="128" rx="28" fill="#0f141c" />
+  <!--
+    Lighter stroke than a naive scale-up would give. Scaling the mark also
+    scales the gate, so holding the stroke proportional would squeeze the seam
+    shut relative to the strokes around it; thinning it keeps the gap reading
+    as a deliberate opening rather than a printing gap.
+  -->
+  <g fill="none" stroke="#f2f5fb" stroke-width="9" stroke-linecap="butt" stroke-linejoin="miter"
+     transform="translate(20 20) scale(1.375)">
+    <path d="M17 17 H47 L35.89 28.11" />
+    <path d="M28.11 35.89 L17 47 H47" />
+  </g>
+</svg>

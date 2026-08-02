@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Inzo">
+  <!--
+    Favicon cut: tighter padding, heavier stroke, and a wider gate so the seam
+    still reads at 16px instead of closing up into a plain Z.
+
+    A favicon inherits no colour, so the light/dark switch has to live in the
+    file. Browsers that ignore the media query fall back to the dark ink fill,
+    which is the common case on light browser chrome.
+  -->
+  <style>
+    .glyph { stroke: #0f141c; }
+    @media (prefers-color-scheme: dark) { .glyph { stroke: #f2f5fb; } }
+  </style>
+  <g class="glyph" fill="none" stroke-width="9" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M12 14 H52 L37.20 27.32" />
+    <path d="M26.80 36.68 L12 50 H52" />
+  </g>
+</svg>
