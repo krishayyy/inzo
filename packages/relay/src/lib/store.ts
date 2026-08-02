@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { badRequest, conflict, forbidden, gone, notFound } from "./errors.js";
 import { relayEvents } from "./events.js";
-import { generateId, generatePairingCode } from "./ids.js";
+import { generateAgentToken, generateId, generatePairingCode, hashAgentToken } from "./ids.js";
 import type {
   CombinedUsage,
   Message,
@@ -22,6 +22,13 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_tokens (
+  token_hash TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  pairing_id TEXT,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pairings (
@@ -137,10 +144,9 @@ export class RelayStore {
   // Pairing codes + pairings
   // ---------------------------------------------------------------------
 
-  createPairingCode(creatorAgentId: string): PairingCode {
-    if (!creatorAgentId?.trim()) {
-      throw badRequest("agentId is required");
-    }
+  createPairingCode(): PairingCode & { agentToken: string; pairingId: null } {
+    const creatorAgentId = generateId("agent");
+    const agentToken = generateAgentToken();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + PAIRING_CODE_TTL_MS);
 
@@ -154,7 +160,9 @@ export class RelayStore {
              VALUES (?, ?, ?, ?, NULL)`,
           )
           .run(code, creatorAgentId, now.toISOString(), expiresAt.toISOString());
-        return this.rowToPairingCode(this.getPairingCodeRow(code)!);
+        this.db.prepare(`INSERT INTO agent_tokens (token_hash, agent_id, pairing_id, created_at) VALUES (?, ?, NULL, ?)`)
+          .run(hashAgentToken(agentToken), creatorAgentId, now.toISOString());
+        return { ...this.rowToPairingCode(this.getPairingCodeRow(code)!), agentToken, pairingId: null };
       } catch (err: unknown) {
         if (err instanceof Error && err.message.includes("UNIQUE")) continue;
         throw err;
@@ -163,10 +171,9 @@ export class RelayStore {
     throw new Error("Failed to generate a unique pairing code");
   }
 
-  joinPairing(code: string, joinerAgentId: string): Pairing {
-    if (!joinerAgentId?.trim()) {
-      throw badRequest("agentId is required");
-    }
+  joinPairing(code: string): Pairing & { agentToken: string; peerAgentId: string } {
+    const joinerAgentId = generateId("agent");
+    const agentToken = generateAgentToken();
     const row = this.getPairingCodeRow(code);
     if (!row) {
       throw notFound(`No pairing code "${code}"`);
@@ -198,10 +205,18 @@ export class RelayStore {
           `INSERT INTO pairings (id, code, agent_a, agent_b, created_at) VALUES (?, ?, ?, ?, ?)`,
         )
         .run(pairing.id, code, pairing.agentA, pairing.agentB, pairing.createdAt);
+      this.db.prepare(`UPDATE agent_tokens SET pairing_id = ? WHERE agent_id = ?`).run(pairing.id, pairing.agentA);
+      this.db.prepare(`INSERT INTO agent_tokens (token_hash, agent_id, pairing_id, created_at) VALUES (?, ?, ?, ?)`)
+        .run(hashAgentToken(agentToken), joinerAgentId, pairing.id, pairing.createdAt);
     });
     tx();
 
-    return pairing;
+    return { ...pairing, agentToken, peerAgentId: pairing.agentA };
+  }
+
+  resolveToken(token: string): { agentId: string; pairingId: string | null } | null {
+    const row = this.db.prepare(`SELECT agent_id, pairing_id FROM agent_tokens WHERE token_hash = ?`).get(hashAgentToken(token)) as { agent_id: string; pairing_id: string | null } | undefined;
+    return row ? { agentId: row.agent_id, pairingId: row.pairing_id } : null;
   }
 
   getPairing(pairingId: string): Pairing {

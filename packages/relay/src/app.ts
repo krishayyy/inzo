@@ -5,6 +5,7 @@ import { pairingsRouter } from "./routes/pairings.js";
 import { messagesRouter } from "./routes/messages.js";
 import { planRouter } from "./routes/plan.js";
 import { usageRouter } from "./routes/usage.js";
+import { requireAuth } from "./lib/auth.js";
 
 /** Builds an Express app wired to the given store. Kept separate from index.ts so tests can build an app against an in-memory store without binding a port. */
 export function createApp(store: RelayStore) {
@@ -16,9 +17,9 @@ export function createApp(store: RelayStore) {
   });
 
   app.use("/pairings", pairingsRouter(store));
-  app.use("/pairings/:id/messages", messagesRouter(store));
-  app.use("/pairings/:id/plan", planRouter(store));
-  app.use("/pairings/:id/usage", usageRouter(store));
+  app.use("/pairings/:id/messages", requireAuth(store), messagesRouter(store));
+  app.use("/pairings/:id/plan", requireAuth(store), planRouter(store));
+  app.use("/pairings/:id/usage", requireAuth(store), usageRouter(store));
 
   app.use((req, res) => {
     res.status(404).json({ error: { code: "not_found", message: `No route for ${req.method} ${req.path}` } });

@@ -9,9 +9,8 @@ export function usageRouter(store: RelayStore): Router {
 
   // POST /pairings/:id/usage — an agent self-reports its own usage.
   const report: RequestHandler<PairingParams> = (req, res) => {
-    const { agentId, tokensUsed, costUsd, wallClockMs, progressPct } = req.body ?? {};
-    if (agentId === undefined) throw badRequest("agentId is required");
-    const usage = store.reportUsage(req.params.id, agentId, {
+    const { tokensUsed, costUsd, wallClockMs, progressPct } = req.body ?? {};
+    const usage = store.reportUsage(req.params.id, req.inzoAuth!.agentId, {
       tokensUsed: tokensUsed ?? 0,
       costUsd: costUsd ?? 0,
       wallClockMs: wallClockMs ?? 0,

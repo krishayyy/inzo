@@ -9,6 +9,7 @@
 export interface SessionState {
   pairingId: string | null;
   agentId: string;
+  agentToken: string | null;
 }
 
 function generateAgentId(): string {
@@ -20,6 +21,7 @@ export const sessionState: SessionState = {
   // A stable-ish identifier for this side of the pairing, used when reporting
   // usage / approvals. Can be overridden via INZO_AGENT_ID for readability.
   agentId: process.env.INZO_AGENT_ID ?? generateAgentId(),
+  agentToken: null,
 };
 
 export function requirePairingId(): string {
@@ -32,5 +34,11 @@ export function requirePairingId(): string {
 }
 
 export function setPairingId(pairingId: string): void {
+  sessionState.pairingId = pairingId;
+}
+
+export function setIdentity(agentId: string, agentToken: string, pairingId: string | null): void {
+  sessionState.agentId = agentId;
+  sessionState.agentToken = agentToken;
   sessionState.pairingId = pairingId;
 }

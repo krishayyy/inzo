@@ -23,7 +23,7 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  query?: Record<string, string | number | undefined>,
+  query?: Record<string, string | number | undefined>, token?: string,
 ): Promise<T> {
   let url = `${RELAY_URL}${path}`;
   if (query) {
@@ -39,7 +39,7 @@ async function request<T>(
   try {
     res = await fetch(url, {
       method,
-      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
@@ -158,64 +158,61 @@ export interface ReportUsageInput {
 export const relayClient = {
   baseUrl: RELAY_URL,
 
-  createPairing(agentId: string): Promise<{ pairingCode: PairingCode }> {
-    return request("POST", "/pairings", { agentId });
+  createPairing(): Promise<{ code: string; expiresAt: string; agentId: string; agentToken: string; pairingId: null }> {
+    return request("POST", "/pairings", {});
   },
 
-  joinPairing(code: string, agentId: string): Promise<{ pairing: Pairing }> {
-    return request("POST", `/pairings/${encodeURIComponent(code)}/join`, { agentId });
+  joinPairing(code: string): Promise<{ pairingId: string; agentId: string; agentToken: string; peerAgentId: string }> {
+    return request("POST", `/pairings/${encodeURIComponent(code)}/join`, {});
   },
 
   getPairing(pairingId: string): Promise<{ pairing: Pairing }> {
     return request("GET", `/pairings/${encodeURIComponent(pairingId)}`);
   },
 
-  getPairingByCode(code: string): Promise<{ pairing: Pairing | null }> {
-    return request("GET", `/pairings/by-code/${encodeURIComponent(code)}`);
+  getMine(token: string): Promise<{ pairing: Pairing | null }> {
+    return request("GET", "/pairings/mine", undefined, undefined, token);
   },
 
-  sendMessage(pairingId: string, fromAgentId: string, body: string): Promise<{ message: Message }> {
-    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/messages`, {
-      fromAgentId,
-      body,
-    });
+  sendMessage(pairingId: string, token: string, body: string): Promise<{ message: Message }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/messages`, { body }, undefined, token);
   },
 
-  getMessages(pairingId: string, since?: number): Promise<{ messages: Message[]; cursor: number }> {
+  getMessages(pairingId: string, token: string, since?: number): Promise<{ messages: Message[]; cursor: number }> {
     return request(
       "GET",
       `/pairings/${encodeURIComponent(pairingId)}/messages`,
       undefined,
-      { since },
+      { since }, token,
     );
   },
 
   proposePlan(
     pairingId: string,
-    proposedBy: string,
+    token: string,
     goal: string,
     items: PlanItem[],
   ): Promise<{ plan: Plan }> {
     return request("POST", `/pairings/${encodeURIComponent(pairingId)}/plan`, {
-      proposedBy,
       goal,
       items,
-    });
+    }, undefined, token);
   },
 
-  approvePlan(pairingId: string, agentId: string): Promise<{ plan: Plan }> {
-    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/plan/approve`, { agentId });
+  approvePlan(pairingId: string, token: string): Promise<{ plan: Plan }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/plan/approve`, {}, undefined, token);
   },
 
-  getPlan(pairingId: string): Promise<{ plan: Plan | null }> {
-    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/plan`);
+  getPlan(pairingId: string, token: string): Promise<{ plan: Plan | null }> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/plan`, undefined, undefined, token);
   },
 
-  reportUsage(pairingId: string, input: ReportUsageInput): Promise<{ usage: UsageReport }> {
-    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/usage`, input);
+  reportUsage(pairingId: string, token: string, input: ReportUsageInput): Promise<{ usage: UsageReport }> {
+    const { agentId: _agentId, ...body } = input;
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/usage`, body, undefined, token);
   },
 
-  getUsage(pairingId: string): Promise<{ usage: CombinedUsage }> {
-    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/usage`);
+  getUsage(pairingId: string, token: string): Promise<{ usage: CombinedUsage }> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/usage`, undefined, undefined, token);
   },
 };

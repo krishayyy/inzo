@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { relayClient } from "./relayClient.js";
-import { requirePairingId, sessionState, setPairingId } from "./sessionState.js";
+import { requirePairingId, sessionState, setIdentity } from "./sessionState.js";
 
 function textResult(payload: unknown) {
   return {
@@ -22,6 +22,11 @@ function errorResult(err: unknown) {
   };
 }
 
+function requireToken(): string {
+  if (!sessionState.agentToken) throw new Error("No agent credential is available. Pair this agent first.");
+  return sessionState.agentToken;
+}
+
 export function registerTools(server: McpServer): void {
   server.registerTool(
     "create_pairing_code",
@@ -33,7 +38,8 @@ export function registerTools(server: McpServer): void {
     },
     async () => {
       try {
-        const { pairingCode } = await relayClient.createPairing(sessionState.agentId);
+        const pairingCode = await relayClient.createPairing();
+        setIdentity(pairingCode.agentId, pairingCode.agentToken, null);
         return textResult({
           code: pairingCode.code,
           expiresAt: pairingCode.expiresAt,
@@ -57,9 +63,9 @@ export function registerTools(server: McpServer): void {
     },
     async ({ code }) => {
       try {
-        const { pairing } = await relayClient.joinPairing(code, sessionState.agentId);
-        setPairingId(pairing.id);
-        return textResult({ pairingId: pairing.id, pairing, message: "Joined pairing successfully." });
+        const pairing = await relayClient.joinPairing(code);
+        setIdentity(pairing.agentId, pairing.agentToken, pairing.pairingId);
+        return textResult({ pairingId: pairing.pairingId, peerAgentId: pairing.peerAgentId, message: "Joined pairing successfully." });
       } catch (err) {
         return errorResult(err);
       }
@@ -78,14 +84,15 @@ export function registerTools(server: McpServer): void {
     },
     async ({ code }) => {
       try {
-        const { pairing } = await relayClient.getPairingByCode(code);
+        if (!sessionState.agentToken) throw new Error("Create a pairing code in this session first.");
+        const { pairing } = await relayClient.getMine(sessionState.agentToken);
         if (!pairing) {
           return textResult({
             joined: false,
             message: "Your teammate hasn't joined with this code yet. Try again shortly.",
           });
         }
-        setPairingId(pairing.id);
+        setIdentity(sessionState.agentId, sessionState.agentToken, pairing.id);
         return textResult({ joined: true, pairingId: pairing.id, pairing });
       } catch (err) {
         return errorResult(err);
@@ -105,7 +112,8 @@ export function registerTools(server: McpServer): void {
     async ({ text }) => {
       try {
         const pairingId = requirePairingId();
-        const { message } = await relayClient.sendMessage(pairingId, sessionState.agentId, text);
+        if (!sessionState.agentToken) throw new Error("No agent credential is available.");
+        const { message } = await relayClient.sendMessage(pairingId, sessionState.agentToken, text);
         return textResult(message);
       } catch (err) {
         return errorResult(err);
@@ -129,7 +137,7 @@ export function registerTools(server: McpServer): void {
     async ({ since }) => {
       try {
         const pairingId = requirePairingId();
-        const result = await relayClient.getMessages(pairingId, since);
+        const result = await relayClient.getMessages(pairingId, requireToken(), since);
         return textResult(result);
       } catch (err) {
         return errorResult(err);
@@ -159,7 +167,7 @@ export function registerTools(server: McpServer): void {
     async ({ goal, tasks }) => {
       try {
         const pairingId = requirePairingId();
-        const { plan } = await relayClient.proposePlan(pairingId, sessionState.agentId, goal, tasks);
+        const { plan } = await relayClient.proposePlan(pairingId, requireToken(), goal, tasks);
         return textResult(plan);
       } catch (err) {
         return errorResult(err);
@@ -178,7 +186,7 @@ export function registerTools(server: McpServer): void {
     async () => {
       try {
         const pairingId = requirePairingId();
-        const { plan } = await relayClient.approvePlan(pairingId, sessionState.agentId);
+        const { plan } = await relayClient.approvePlan(pairingId, requireToken());
         return textResult(plan);
       } catch (err) {
         return errorResult(err);
@@ -196,7 +204,7 @@ export function registerTools(server: McpServer): void {
     async () => {
       try {
         const pairingId = requirePairingId();
-        const { plan } = await relayClient.getPlan(pairingId);
+        const { plan } = await relayClient.getPlan(pairingId, requireToken());
         return textResult(plan ?? { message: "No plan has been proposed yet." });
       } catch (err) {
         return errorResult(err);
@@ -224,7 +232,7 @@ export function registerTools(server: McpServer): void {
     async ({ tokens, cost, seconds, progressPct }) => {
       try {
         const pairingId = requirePairingId();
-        const { usage } = await relayClient.reportUsage(pairingId, {
+        const { usage } = await relayClient.reportUsage(pairingId, requireToken(), {
           agentId: sessionState.agentId,
           tokensUsed: tokens,
           costUsd: cost,
@@ -248,7 +256,7 @@ export function registerTools(server: McpServer): void {
     async () => {
       try {
         const pairingId = requirePairingId();
-        const { usage } = await relayClient.getUsage(pairingId);
+        const { usage } = await relayClient.getUsage(pairingId, requireToken());
         return textResult(usage);
       } catch (err) {
         return errorResult(err);

@@ -8,15 +8,14 @@ export function planRouter(store: RelayStore): Router {
 
   // POST /pairings/:id/plan — propose (or re-propose) a shared goal + task split.
   const propose: RequestHandler<PairingParams> = (req, res) => {
-    const { proposedBy, goal, items } = req.body ?? {};
-    const plan = store.proposePlan(req.params.id, proposedBy, goal, items);
+    const { goal, items } = req.body ?? {};
+    const plan = store.proposePlan(req.params.id, req.inzoAuth!.agentId, goal, items);
     res.status(201).json({ plan });
   };
 
   // POST /pairings/:id/plan/approve — record one human's approval.
   const approve: RequestHandler<PairingParams> = (req, res) => {
-    const { agentId } = req.body ?? {};
-    const plan = store.approvePlan(req.params.id, agentId);
+    const plan = store.approvePlan(req.params.id, req.inzoAuth!.agentId);
     res.json({ plan });
   };
 

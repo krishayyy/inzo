@@ -8,8 +8,8 @@ export function messagesRouter(store: RelayStore): Router {
 
   // POST /pairings/:id/messages — send a message to the paired agent.
   const create: RequestHandler<PairingParams> = (req, res) => {
-    const { fromAgentId, body } = req.body ?? {};
-    const message = store.addMessage(req.params.id, fromAgentId, body);
+    const { body } = req.body ?? {};
+    const message = store.addMessage(req.params.id, req.inzoAuth!.agentId, body);
     res.status(201).json({ message });
   };
 
