@@ -1,0 +1,46 @@
+# Fly.io deployment for the Inzo relay.
+#
+#   fly launch --no-deploy --copy-config
+#   fly volume create inzo_data --size 1
+#   fly deploy
+#
+# SQLite lives on a persistent volume, so this is a single-machine deployment
+# by design: `auto_stop_machines` is off and the count is pinned to 1. Scaling
+# past one machine needs Postgres and an out-of-process event bus first — the
+# SSE fan-out is currently in-process, so a second machine would silently show
+# half the events to half the viewers.
+
+app = "inzo-relay"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  INZO_RELAY_DB_PATH = "/data/relay.db"
+  INZO_TRUST_PROXY = "true"
+
+[[mounts]]
+  source = "inzo_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # SSE streams are long-lived; the default idle handling would cut them.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
