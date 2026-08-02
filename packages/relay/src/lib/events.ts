@@ -1,18 +1,26 @@
 import { EventEmitter } from "node:events";
-import type { Message, Plan, UsageReport } from "../types.js";
+import type { Budget, Message, Plan, UsageReport } from "../types.js";
 
 /**
  * Central event bus for the relay.
  *
- * Every state change (new message, plan update, usage report) is emitted
- * here in addition to being persisted. Nothing subscribes to it in v1 —
- * clients poll the GET endpoints — but a future WebSocket/SSE layer can
- * subscribe to `pairing:<id>` events without touching the store or routes.
+ * Every state change is published here in addition to being persisted, and
+ * `GET /pairings/:id/stream` subscribes to `pairing:<id>` to push it to both
+ * humans. Keeping the bus separate from the store means routes never have to
+ * know who is watching, and the store never has to know about HTTP.
  */
+export interface Revocation {
+  revokedAgentId: string;
+  revokedAt: string;
+  by: string;
+}
+
 export type RelayEvent =
   | { type: "message.created"; pairingId: string; message: Message }
   | { type: "plan.updated"; pairingId: string; plan: Plan }
-  | { type: "usage.reported"; pairingId: string; usage: UsageReport };
+  | { type: "usage.reported"; pairingId: string; usage: UsageReport }
+  | { type: "budget.updated"; pairingId: string; budget: Budget }
+  | { type: "pairing.revoked"; pairingId: string; revocation: Revocation };
 
 class RelayEventBus extends EventEmitter {
   publish(event: RelayEvent): void {
@@ -22,3 +30,10 @@ class RelayEventBus extends EventEmitter {
 }
 
 export const relayEvents = new RelayEventBus();
+
+/**
+ * Long-lived SSE connections each add a listener for their own pairing. The
+ * default cap of 10 would start printing spurious leak warnings at a handful
+ * of concurrent viewers, which is well within normal use.
+ */
+relayEvents.setMaxListeners(0);

@@ -1,13 +1,38 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { sessionState, requirePairingId, setPairingId } from "../src/sessionState.js";
+import { mkdtempSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  readSessionFile,
+  requirePairingId,
+  requireToken,
+  sessionFilePath,
+  sessionState,
+  setIdentity,
+  setPairingId,
+} from "../src/sessionState.js";
+
+const originalHome = process.env.INZO_HOME;
+
+beforeEach(() => {
+  process.env.INZO_HOME = mkdtempSync(join(tmpdir(), "inzo-home-"));
+  sessionState.pairingId = null;
+  sessionState.agentToken = null;
+  sessionState.scope = [];
+});
+
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.INZO_HOME;
+  else process.env.INZO_HOME = originalHome;
+});
 
 describe("sessionState", () => {
-  beforeEach(() => {
-    sessionState.pairingId = null;
-  });
-
   it("throws a clear error when no pairing is active", () => {
     expect(() => requirePairingId()).toThrow(/No active pairing/);
+  });
+
+  it("throws a clear error when there is no credential", () => {
+    expect(() => requireToken()).toThrow(/Pair this agent first/);
   });
 
   it("returns the pairingId once set", () => {
@@ -17,5 +42,37 @@ describe("sessionState", () => {
 
   it("has a stable agentId for the process lifetime", () => {
     expect(sessionState.agentId).toMatch(/^agent_/);
+  });
+});
+
+describe("session file", () => {
+  it("writes the credential owner-only, so other users on the box cannot read it", () => {
+    setIdentity("agent_1", "secret-token", "pairing_1", ["messages:read"]);
+    const mode = statSync(sessionFilePath()).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("round-trips what the CLI needs to attach without re-pairing", () => {
+    setIdentity("agent_1", "secret-token", "pairing_1", ["messages:read", "messages:send"]);
+    const file = readSessionFile();
+    expect(file).toMatchObject({
+      agentId: "agent_1",
+      agentToken: "secret-token",
+      pairingId: "pairing_1",
+      scope: ["messages:read", "messages:send"],
+    });
+    expect(file?.relayUrl).toBeTruthy();
+  });
+
+  it("stays 0600 when an existing file is rewritten", () => {
+    setIdentity("agent_1", "secret-token", null);
+    setPairingId("pairing_2");
+    expect(statSync(sessionFilePath()).mode & 0o777).toBe(0o600);
+    expect(readSessionFile()?.pairingId).toBe("pairing_2");
+  });
+
+  it("does not write anything before there is a credential to store", () => {
+    setPairingId("pairing_1");
+    expect(readSessionFile()).toBeNull();
   });
 });

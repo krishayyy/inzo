@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from "express";
+import { requireScope } from "../lib/auth.js";
 import type { RelayStore } from "../lib/store.js";
-import { badRequest } from "../lib/errors.js";
 
 type PairingParams = { id: string };
 
@@ -8,24 +8,26 @@ export function usageRouter(store: RelayStore): Router {
   const router = Router({ mergeParams: true });
 
   // POST /pairings/:id/usage — an agent self-reports its own usage.
+  //
+  // Values are CUMULATIVE totals for this agent, not deltas, which is what
+  // makes a dropped or duplicated report harmless.
   const report: RequestHandler<PairingParams> = (req, res) => {
     const { tokensUsed, costUsd, wallClockMs, progressPct } = req.body ?? {};
-    const usage = store.reportUsage(req.params.id, req.inzoAuth!.agentId, {
+    store.reportUsage(req.params.id, req.inzoAuth!.agentId, {
       tokensUsed: tokensUsed ?? 0,
       costUsd: costUsd ?? 0,
       wallClockMs: wallClockMs ?? 0,
       progressPct: progressPct ?? 0,
     });
-    res.status(201).json({ usage });
+    res.status(201).json(store.getUsageSnapshot(req.params.id));
   };
 
-  // GET /pairings/:id/usage — combined usage for both sides of the pairing.
+  // GET /pairings/:id/usage — combined usage plus the derived runway.
   const get: RequestHandler<PairingParams> = (req, res) => {
-    const usage = store.getUsage(req.params.id);
-    res.json({ usage });
+    res.json(store.getUsageSnapshot(req.params.id));
   };
 
-  router.post("/", report);
+  router.post("/", requireScope("usage:report"), report);
   router.get("/", get);
 
   return router;

@@ -1,33 +1,31 @@
 {
-  "name": "inzo-relay",
+  "name": "inzo",
   "version": "0.1.0",
-  "description": "Inzo relay: the shared backend two paired coding agents talk through.",
+  "description": "Human-side live viewer for an Inzo pairing: watch two agents negotiate, approve the plan, pull the kill switch.",
   "type": "module",
+  "bin": {
+    "inzo": "dist/index.js"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "engines": {
-    "node": ">=20"
-  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {
-    "better-sqlite3": "^11.8.1",
-    "express": "^4.21.2"
-  },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/express": "^4.17.21",
-    "@types/node": "^20.17.9",
-    "@types/supertest": "^6.0.2",
-    "supertest": "^7.0.0",
+    "@types/node": "^22.10.2",
+    "inzo-relay": "*",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "license": "Apache-2.0",
   "author": "Krishay Suresh",
@@ -35,7 +33,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/krishayyy/inzo.git",
-    "directory": "packages/relay"
+    "directory": "packages/cli"
   },
   "bugs": {
     "url": "https://github.com/krishayyy/inzo/issues"
@@ -43,17 +41,13 @@
   "publishConfig": {
     "access": "public"
   },
-  "files": [
-    "dist"
-  ],
   "keywords": [
-    "ai-agents",
     "mcp",
-    "a2a",
-    "agent-coordination",
-    "relay"
+    "ai-agents",
+    "cli",
+    "agent-coordination"
   ],
-  "bin": {
-    "inzo-relay": "dist/index.js"
+  "dependencies": {
+    "inzo-holder": "*"
   }
 }

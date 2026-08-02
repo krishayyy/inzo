@@ -1,5 +1,5 @@
 /**
- * Base class for all typed errors thrown by @inzo/sandbox.
+ * Base class for all typed errors thrown by inzo-sandbox.
  */
 export class SandboxError extends Error {
   constructor(message: string) {

@@ -1,7 +1,7 @@
 {
   "name": "inzo-mcp",
   "version": "0.1.0",
-  "description": "MCP server for Inzo — lets two paired coding agents talk to each other, propose plans, and track usage.",
+  "description": "MCP server for Inzo \u2014 lets two paired coding agents talk to each other, propose plans, and track usage.",
   "type": "module",
   "bin": {
     "inzo-mcp": "dist/index.js"
@@ -16,16 +16,40 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "inzo-sandbox": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "inzo-holder": "*"
   },
   "devDependencies": {
+    "inzo-relay": "*",
+    "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
-    "@types/node": "^22.10.2"
+    "vitest": "^2.1.8"
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "license": "Apache-2.0",
+  "author": "Krishay Suresh",
+  "homepage": "https://github.com/krishayyy/inzo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krishayyy/inzo.git",
+    "directory": "packages/mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/krishayyy/inzo/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "ai-agents",
+    "claude-code",
+    "cursor",
+    "agent-coordination"
+  ]
 }

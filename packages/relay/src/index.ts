@@ -1,15 +1,25 @@
+#!/usr/bin/env node
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createApp } from "./app.js";
 import { RelayStore } from "./lib/store.js";
 
-export { createApp } from "./app.js";
-export { RelayStore } from "./lib/store.js";
-export { relayEvents } from "./lib/events.js";
+export { createApp, type AppOptions } from "./app.js";
+export { RelayStore, type BudgetInput, type UsageInput } from "./lib/store.js";
+export { relayEvents, type RelayEvent, type Revocation } from "./lib/events.js";
+export { computeRunway, foldUsage } from "./lib/runway.js";
+export { FailureLimiter } from "./lib/rateLimit.js";
+export { requestLogger } from "./lib/logging.js";
 export * from "./types.js";
+
+/** Expired-but-unused pairing codes are swept on this cadence. */
+const PURGE_INTERVAL_MS = 15 * 60 * 1000;
 
 function main() {
   const port = Number(process.env.PORT ?? 8787);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`PORT must be a valid port number, got "${process.env.PORT}"`);
+  }
   const dbPath = process.env.INZO_RELAY_DB_PATH ?? "./data/relay.db";
 
   if (dbPath !== ":memory:") {
@@ -17,12 +27,46 @@ function main() {
   }
 
   const store = new RelayStore(dbPath);
-  const app = createApp(store);
+  const app = createApp(store, {
+    trustProxy: process.env.INZO_TRUST_PROXY === "true",
+    logging: process.env.INZO_LOG !== "off",
+  });
 
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`inzo relay listening on http://localhost:${port} (db: ${dbPath})`);
   });
+
+  const purge = setInterval(() => {
+    try {
+      store.purgeExpiredCodes();
+    } catch (err) {
+      // A failed sweep is not worth taking the relay down for.
+      // eslint-disable-next-line no-console
+      console.error("purge failed", err);
+    }
+  }, PURGE_INTERVAL_MS);
+  purge.unref();
+
+  // Platforms like Fly and Docker send SIGTERM and then hard-kill. Closing the
+  // SQLite handle explicitly avoids leaving a hot WAL behind on every deploy.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    // eslint-disable-next-line no-console
+    console.log(`${signal} received, shutting down`);
+    clearInterval(purge);
+    // SSE connections are open by design and will never close on their own.
+    server.closeAllConnections();
+    server.close(() => {
+      store.close();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 5000).unref();
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 // Only boot the server when this file is run directly (not when imported by tests).
