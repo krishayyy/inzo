@@ -1,0 +1,16 @@
+{
+  "name": "inzo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agent-to-agent coordination, with humans in the loop.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
