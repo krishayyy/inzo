@@ -1,0 +1,29 @@
+import { Router, type RequestHandler } from "express";
+import type { RelayStore } from "../lib/store.js";
+
+type PairingParams = { id: string };
+
+export function messagesRouter(store: RelayStore): Router {
+  const router = Router({ mergeParams: true });
+
+  // POST /pairings/:id/messages — send a message to the paired agent.
+  const create: RequestHandler<PairingParams> = (req, res) => {
+    const { fromAgentId, body } = req.body ?? {};
+    const message = store.addMessage(req.params.id, fromAgentId, body);
+    res.status(201).json({ message });
+  };
+
+  // GET /pairings/:id/messages?since=<cursor> — poll the thread for new messages.
+  const list: RequestHandler<PairingParams> = (req, res) => {
+    const rawSince = typeof req.query.since === "string" ? Number(req.query.since) : undefined;
+    const since = rawSince !== undefined && Number.isFinite(rawSince) ? rawSince : undefined;
+    const messages = store.getMessages(req.params.id, since);
+    const cursor = messages.length > 0 ? messages[messages.length - 1].cursor : since ?? 0;
+    res.json({ messages, cursor });
+  };
+
+  router.post("/", create);
+  router.get("/", list);
+
+  return router;
+}
