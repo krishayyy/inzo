@@ -44,6 +44,22 @@ export function createApp(store: RelayStore, options: AppOptions = {}) {
   // becoming a memory problem.
   app.use(express.json({ limit: "128kb" }));
 
+  // This relay is a credential-bearing JSON/SSE API, never an embeddable web
+  // application. Set these centrally so a new route cannot accidentally ship
+  // weaker browser behavior. `no-referrer` is especially important because the
+  // SSE compatibility path carries a short-lived credential in its query.
+  app.use((_req, res, next) => {
+    res.set({
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+    });
+    next();
+  });
+
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
   });
