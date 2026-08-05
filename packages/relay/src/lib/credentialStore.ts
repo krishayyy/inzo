@@ -8,12 +8,13 @@
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
-import { createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
+import { createPrivateKey, createPublicKey, randomUUID, type KeyObject } from "node:crypto";
 import { AuditLog, AUDIT_SCHEMA, type Assurance, type AuditAction, type AuditActor } from "./audit.js";
 import {
   attenuate,
   generateIssuerKey,
   issueCredential,
+  MAX_TTL_SECONDS,
   toJwk,
   verifyCredential,
   type CredentialPayload,
@@ -87,10 +88,14 @@ export interface IssuedCredential {
 
 export class CredentialStore {
   readonly audit: AuditLog;
-  private readonly issuerKey: IssuerKey;
+  private issuerKey: IssuerKey;
   /** In-memory mirror of the revoked set. Verification happens on every
    *  request; a SQL round-trip per check is not worth it at this scale. */
   private readonly revokedJtis = new Set<string>();
+  /** Every issuer key we have ever signed with, retired ones included, keyed
+   *  by `kid`. Signing uses only the active key; verification must accept any
+   *  key that could still appear in an unexpired credential. §4.1 */
+  private verificationKeys = new Map<string, KeyObject>();
 
   constructor(
     private readonly db: DatabaseType,
@@ -99,6 +104,7 @@ export class CredentialStore {
     this.db.exec(CREDENTIAL_SCHEMA);
     this.audit = new AuditLog(db);
     this.issuerKey = this.loadOrCreateIssuerKey();
+    this.loadVerificationKeys();
     for (const row of this.db.prepare(`SELECT jti FROM credentials WHERE revoked_at IS NOT NULL`).all() as Array<{
       jti: string;
     }>) {
@@ -133,6 +139,83 @@ export class CredentialStore {
         new Date().toISOString(),
       );
     return key;
+  }
+
+  /**
+   * Loads the full verification set: active AND retired keys.
+   *
+   * Signing and verification have different lifetimes on purpose. The moment a
+   * key is retired we stop signing with it, but credentials signed a second
+   * earlier stay valid until they expire — so a verifier that only knows the
+   * active key would reject perfectly good credentials for up to MAX_TTL after
+   * every rotation. Retired keys are pruned once nothing can reference them.
+   */
+  private loadVerificationKeys(): void {
+    const rows = this.db.prepare(`SELECT kid, public_jwk FROM issuer_keys`).all() as Array<{
+      kid: string;
+      public_jwk: string;
+    }>;
+    this.verificationKeys = new Map(
+      rows.map((row) => [
+        row.kid,
+        createPublicKey({ key: JSON.parse(row.public_jwk) as Jwk as unknown as Record<string, unknown>, format: "jwk" }),
+      ]),
+    );
+  }
+
+  /** The `kid` currently being signed with. */
+  activeKid(): string {
+    return this.issuerKey.kid;
+  }
+
+  /**
+   * Rotates the signing key — §4.1.
+   *
+   * Without this, a compromised or simply aged key can only be replaced by
+   * invalidating every live credential at once, which is why rotation that is
+   * theoretically possible but operationally catastrophic never actually gets
+   * done. New credentials are signed with the new key immediately; existing
+   * ones keep verifying against the retired key until they expire.
+   *
+   * Returns the new `kid`. Callers should publish the updated JWKS before
+   * relying on it — verifiers cache.
+   */
+  rotateIssuerKey(now = new Date()): string {
+    const next = generateIssuerKey();
+    const stamp = now.toISOString();
+
+    this.db.transaction(() => {
+      this.db.prepare(`UPDATE issuer_keys SET retired_at = ? WHERE kid = ? AND retired_at IS NULL`).run(stamp, this.issuerKey.kid);
+      this.db
+        .prepare(`INSERT INTO issuer_keys (kid, private_pem, public_jwk, created_at) VALUES (?, ?, ?, ?)`)
+        .run(
+          next.kid,
+          next.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+          JSON.stringify(toJwk(next.publicKey)),
+          stamp,
+        );
+    })();
+
+    this.issuerKey = next;
+    this.loadVerificationKeys();
+    return next.kid;
+  }
+
+  /**
+   * Drops retired keys that can no longer appear in a live credential.
+   *
+   * Safe only because credential lifetime is hard-capped at MAX_TTL_SECONDS: a
+   * key retired longer ago than that cannot have signed anything still valid.
+   * Keeping them forever would grow the JWKS without bound and leave private
+   * material on disk with no remaining purpose.
+   */
+  pruneRetiredKeys(now = Date.now()): number {
+    const cutoff = new Date(now - MAX_TTL_SECONDS * 1000).toISOString();
+    const result = this.db
+      .prepare(`DELETE FROM issuer_keys WHERE retired_at IS NOT NULL AND retired_at < ?`)
+      .run(cutoff);
+    if (result.changes > 0) this.loadVerificationKeys();
+    return result.changes;
   }
 
   /** `GET /.well-known/inzo-jwks` — §4. Cacheable, unauthenticated. */
@@ -228,8 +311,7 @@ export class CredentialStore {
   }
 
   verify(credential: string, now = Date.now()): CredentialPayload {
-    const keys = new Map([[this.issuerKey.kid, this.issuerKey.publicKey]]);
-    return verifyCredential(credential, keys, {
+    return verifyCredential(credential, this.verificationKeys, {
       now,
       revoked: this.revokedJtis,
       expectedIssuer: this.issuerUrl,

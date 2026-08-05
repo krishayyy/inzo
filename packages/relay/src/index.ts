@@ -15,12 +15,48 @@ export * from "./types.js";
 /** Expired-but-unused pairing codes are swept on this cadence. */
 const PURGE_INTERVAL_MS = 15 * 60 * 1000;
 
+function resolveDbPath(): string {
+  return process.env.INZO_RELAY_DB_PATH ?? "./data/relay.db";
+}
+
+/**
+ * `inzo-relay rotate-key` — §4.1.
+ *
+ * Deliberately an operator command rather than an HTTP route. Key rotation is
+ * the single most powerful operation on the relay, and giving it a network
+ * surface means giving it an authorization story, an audit story, and a new
+ * way to be wrong. Shell access to the host is already strictly more authority
+ * than this command grants.
+ */
+function rotateKeyCommand(): void {
+  const dbPath = resolveDbPath();
+  const store = new RelayStore(dbPath);
+  try {
+    const previous = store.credentials.activeKid();
+    const next = store.credentials.rotateIssuerKey();
+    const pruned = store.credentials.pruneRetiredKeys();
+    // eslint-disable-next-line no-console
+    console.log(
+      [
+        `rotated issuer key: ${previous} -> ${next}`,
+        `${previous} is retired but still published in the JWKS; credentials it signed stay valid until they expire.`,
+        pruned > 0 ? `pruned ${pruned} key(s) retired long enough that nothing they signed can still be alive.` : null,
+        `Verifiers cache the JWKS — allow their cache TTL to pass before assuming everyone has the new key.`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  } finally {
+    store.close();
+  }
+}
+
 function main() {
   const port = Number(process.env.PORT ?? 8787);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`PORT must be a valid port number, got "${process.env.PORT}"`);
   }
-  const dbPath = process.env.INZO_RELAY_DB_PATH ?? "./data/relay.db";
+  const dbPath = resolveDbPath();
 
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -40,6 +76,9 @@ function main() {
   const purge = setInterval(() => {
     try {
       store.purgeExpiredCodes();
+      // Retired keys age out on the same sweep; nothing they signed can still
+      // be alive once they are past the TTL ceiling.
+      store.credentials.pruneRetiredKeys();
     } catch (err) {
       // A failed sweep is not worth taking the relay down for.
       // eslint-disable-next-line no-console
@@ -71,5 +110,9 @@ function main() {
 
 // Only boot the server when this file is run directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main();
+  if (process.argv[2] === "rotate-key") {
+    rotateKeyCommand();
+  } else {
+    main();
+  }
 }

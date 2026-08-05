@@ -37,9 +37,13 @@ Coordination is the feature; the trust boundary is the product.
   field; anyone with a pairing code could impersonate an agent, read the private
   thread, and forge *both* approvals to lock a hostile plan.)
 - **Credentials are signed, not opaque.** A credential is a compact Ed25519 JWS
-  carrying its principal, capabilities, and full delegation chain. Anyone can verify
-  it offline against `/.well-known/inzo-jwks` — no callback to us, and no
-  pre-existing agreement between the two organizations.
+  carrying its principal, capabilities, and full delegation chain. Anyone can check
+  its signature, capabilities, and chain against the cacheable
+  `/.well-known/inzo-jwks` — no per-request callback to us, and no pre-existing
+  agreement between the two organizations. Revocation is the one live input: a
+  verifier also reads the cacheable `/.well-known/inzo-revocations` feed, so a
+  verifier running fully offline is stale about revocation for at most its cache
+  TTL, and never longer than the one-hour ceiling on credential lifetime.
 - **Proof of possession.** Each credential is bound to a holder key generated on
   your machine and never transmitted. Requests carry a signature over the method,
   path, and a hash of the body, so a stolen credential is inert and a plan cannot be
@@ -159,6 +163,21 @@ fan-out is in-process, so a second machine would show half the events to half th
 viewers. Moving past one machine means Postgres plus an out-of-process event bus,
 and that is not worth doing before there is load to justify it.
 
+### Rotating the issuer key
+
+```bash
+node packages/relay/dist/index.js rotate-key
+```
+
+New credentials are signed with the new key immediately. The old key is retired
+but stays published in the JWKS, so credentials it already signed keep verifying
+until they expire — rotating does not log everyone out. Retired keys are dropped
+automatically once nothing they signed can still be alive.
+
+It is an operator command rather than an HTTP route on purpose: the most
+powerful operation on the relay should not have a network surface, and shell
+access to the host already implies more authority than this grants.
+
 ## Configuration
 
 | Variable | Used by | Meaning |
@@ -208,8 +227,8 @@ Two consequences worth knowing:
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `GET /.well-known/inzo-jwks` | none | Issuer public keys — verify any credential offline |
-| `GET /.well-known/inzo-revocations` | none | Signed revocation set |
+| `GET /.well-known/inzo-jwks` | none | Issuer public keys, active and recently retired — check any credential's signature without calling us |
+| `GET /.well-known/inzo-revocations` | none | Signed revocation set, cacheable with an explicit `expiresAt` |
 | `POST /credentials/attenuate` | v3 | Mint a narrowed child credential |
 | `GET /pairings/:id/consent` | v3/v2 | Current consent record |
 | `POST /pairings/:id/consent/withdraw` | v3 | Pull your approval, unilaterally |

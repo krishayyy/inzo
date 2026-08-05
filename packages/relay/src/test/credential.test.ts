@@ -19,6 +19,7 @@ import {
   generateIssuerKey,
   issueCredential,
   MAX_DEPTH,
+  MAX_TTL_SECONDS,
   ProofReplayGuard,
   proofInput,
   signProof,
@@ -504,6 +505,97 @@ describe("consent store (§6.3)", () => {
     const first = store.jwks().keys[0].kid;
     const reopened = new CredentialStore(db, ISSUER);
     expect(reopened.jwks().keys[0].kid).toBe(first);
+  });
+});
+
+describe("issuer key rotation (§4.1)", () => {
+  let store: CredentialStore;
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    store = new CredentialStore(db, ISSUER);
+  });
+
+  function issueFor(agentId: string) {
+    const holder = generateHolderKeyPair();
+    return store.issueRoot({
+      agentId,
+      principalId: "prn_a",
+      pairingId: "pairing_1",
+      cap: ALL,
+      cnf: { jwk: holder.publicJwk },
+    });
+  }
+
+  it("signs new credentials with the new key", () => {
+    const before = store.activeKid();
+    const after = store.rotateIssuerKey();
+    expect(after).not.toBe(before);
+    expect(store.activeKid()).toBe(after);
+
+    const issued = issueFor("agent_new");
+    const header = JSON.parse(Buffer.from(issued.credential.split(".")[0], "base64url").toString());
+    expect(header.kid).toBe(after);
+  });
+
+  it("keeps credentials signed by the retired key verifiable until they expire", () => {
+    const issued = issueFor("agent_old");
+    store.rotateIssuerKey();
+    // This is the whole point: rotation must not be a mass invalidation event.
+    expect(store.verify(issued.credential).jti).toBe(issued.payload.jti);
+  });
+
+  it("publishes both keys in the JWKS so external verifiers can catch up", () => {
+    const before = store.activeKid();
+    const after = store.rotateIssuerKey();
+    const kids = store.jwks().keys.map((key) => key.kid);
+    expect(kids).toContain(before);
+    expect(kids).toContain(after);
+  });
+
+  it("survives a restart with the newest key active and the old one still trusted", () => {
+    const issued = issueFor("agent_old");
+    const rotated = store.rotateIssuerKey();
+
+    const reopened = new CredentialStore(db, ISSUER);
+    expect(reopened.activeKid()).toBe(rotated);
+    expect(reopened.verify(issued.credential).jti).toBe(issued.payload.jti);
+  });
+
+  it("still rejects a credential signed by a key this issuer never had", () => {
+    const foreign = generateIssuerKey();
+    const holder = generateHolderKeyPair();
+    const forged = issueCredential(foreign, {
+      issuer: ISSUER,
+      agentId: "agent_a",
+      principalId: "prn_a",
+      pairingId: "pairing_1",
+      cap: ALL,
+      cnf: { jwk: holder.publicJwk },
+    });
+    store.rotateIssuerKey();
+    expect(() => store.verify(forged.credential)).toThrow(/Unknown issuer key/);
+  });
+
+  it("prunes retired keys only once nothing they signed can still be alive", () => {
+    const retiredKid = store.activeKid();
+    store.rotateIssuerKey();
+
+    // A moment after retirement, credentials signed by it may still be valid.
+    expect(store.pruneRetiredKeys(Date.now())).toBe(0);
+    expect(store.jwks().keys.map((key) => key.kid)).toContain(retiredKid);
+
+    // Past the hard TTL ceiling, nothing can reference it any more.
+    const wellPastTtl = Date.now() + (MAX_TTL_SECONDS + 60) * 1000;
+    expect(store.pruneRetiredKeys(wellPastTtl)).toBe(1);
+    expect(store.jwks().keys.map((key) => key.kid)).not.toContain(retiredKid);
+  });
+
+  it("never prunes the active key", () => {
+    const active = store.activeKid();
+    store.pruneRetiredKeys(Date.now() + MAX_TTL_SECONDS * 10 * 1000);
+    expect(store.jwks().keys.map((key) => key.kid)).toContain(active);
   });
 });
 

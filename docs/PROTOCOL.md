@@ -357,6 +357,38 @@ credential lifetime — which is why §1.1 caps `exp`.
 
 Unauthenticated, cacheable. The issuer's public signing keys.
 
+The set contains the **active** key and any **retired** keys that could still
+appear in an unexpired credential. Verifiers MUST resolve `kid` against the
+whole set, not against "the newest key" — see §4.1.
+
+### 4.1 Key rotation
+
+An issuer MAY rotate its signing key at any time. Rotation is deliberately not
+a network route: it is an operator command (`inzo-relay rotate-key`), because
+giving the most powerful operation on the relay an HTTP surface means giving it
+an authorization story and a new way to be wrong, and host access already
+implies strictly more authority than the command grants.
+
+Rules:
+
+1. Signing switches to the new key immediately. Credentials issued after
+   rotation carry the new `kid`.
+2. The previous key is marked retired but **stays published** in the JWKS.
+   Credentials it signed remain valid until their own `exp`. Rotation is not a
+   mass invalidation event — an issuer that cannot rotate without logging
+   everyone out will never rotate.
+3. A retired key MAY be dropped from the JWKS once it has been retired for
+   longer than `MAX_TTL` (§1.1), at which point no credential it signed can
+   still be alive.
+4. Rotation does not change what any credential is allowed to do. It is a
+   change of signer, not of authority.
+5. Verifiers cache the JWKS. After rotating, an issuer SHOULD assume peers have
+   the old set for at least their cache TTL.
+
+Rotation never widens the trusted set beyond keys this issuer actually held: a
+credential signed by an unknown `kid` is rejected before and after rotation
+alike.
+
 ---
 
 ## 5. Messages, plans, budget, usage
