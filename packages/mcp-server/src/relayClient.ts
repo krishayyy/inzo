@@ -8,7 +8,12 @@
 
 import { buildAuthHeaders } from "inzo-holder";
 
-const RELAY_URL = process.env.INZO_RELAY_URL ?? "http://localhost:8787";
+/**
+ * Defaults to the hosted relay so `inzo-mcp` works out of the box. Set
+ * INZO_RELAY_URL to point at a self-hosted relay (e.g. local dev, or your own
+ * Fly deployment) instead.
+ */
+const RELAY_URL = process.env.INZO_RELAY_URL ?? "https://inzo-relay.onrender.com";
 
 /**
  * How a request proves who is making it.

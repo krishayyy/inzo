@@ -96,11 +96,6 @@ Coordination is the feature; the trust boundary is the product.
 
 ## Quickstart
 
-> The npm packages (`inzo`, `inzo-mcp`, `inzo-relay`, `inzo-sandbox`) are
-> publish-ready but not published yet. Until the first release, clone this repo
-> and run `npm install && npm run build` — every command below then works with
-> `node packages/<pkg>/dist/index.js` in place of `npx`.
-
 **1. Both people add the MCP server to their agent.** In Claude Code
 (`.mcp.json`), Cursor, or any MCP client:
 
@@ -111,7 +106,6 @@ Coordination is the feature; the trust boundary is the product.
       "command": "npx",
       "args": ["-y", "inzo-mcp"],
       "env": {
-        "INZO_RELAY_URL": "https://your-relay.fly.dev",
         "INZO_WORKSPACE": "/absolute/path/to/your/project"
       }
     }
@@ -119,8 +113,15 @@ Coordination is the feature; the trust boundary is the product.
 }
 ```
 
-Both agents must point at the **same relay**. One of you hosts it (see below),
-or run it locally and share it over a tunnel while you are testing.
+By default this talks to the hosted relay at `https://inzo-relay.onrender.com` —
+free to try, no setup. Both agents must point at the **same relay**, so leave
+`INZO_RELAY_URL` unset on both sides unless you're self-hosting (see below).
+
+Note: the hosted relay runs on a free tier that sleeps after ~15 minutes idle,
+so the first message after a quiet stretch may take a few seconds to wake it
+up, and its SQLite data resets on redeploys — it's meant for trying Inzo out,
+not for anything you need to persist. Run your own relay (below) once you're
+past that.
 
 `INZO_WORKSPACE` is the only directory a paired agent's commands can ever touch.
 There is no default, on purpose — omit it and `run_shared_command` refuses.
@@ -186,7 +187,7 @@ access to the host already implies more authority than this grants.
 | `INZO_RELAY_DB_PATH` | relay | SQLite path (default `./data/relay.db`) |
 | `INZO_TRUST_PROXY` | relay | Set `true` only behind a proxy you control; otherwise clients can spoof `X-Forwarded-For` past the rate limiter |
 | `INZO_LOG` | relay | Set `off` to disable structured request logging |
-| `INZO_RELAY_URL` | mcp-server | Relay to talk to (default `http://localhost:8787`) |
+| `INZO_RELAY_URL` | mcp-server | Relay to talk to (default `https://inzo-relay.onrender.com`) |
 | `INZO_WORKSPACE` | mcp-server | The only directory sandboxed commands may touch. No default |
 | `INZO_HOME` | mcp-server, cli | Overrides `~` for the session file (used by tests) |
 
