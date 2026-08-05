@@ -1,0 +1,25 @@
+# Render blueprint for the Inzo relay — free tier, no persistent disk.
+#
+# Free tier has no card requirement, but two tradeoffs vs. Fly (see fly.toml):
+#   - Spins down after ~15 min idle; the next request pays a cold start, and
+#     any open SSE connection drops during that window.
+#   - No attached disk on the free plan, so INZO_RELAY_DB_PATH lives on the
+#     container's local ephemeral storage: it survives while the instance
+#     stays warm, but resets on every redeploy or restart. Fine for trying
+#     Inzo out; not durable enough to depend on long-term.
+#
+# Deploy: render.com -> New -> Blueprint -> point at this repo.
+services:
+  - type: web
+    name: inzo-relay
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8787
+      - key: INZO_RELAY_DB_PATH
+        value: /app/data/relay.db
+      - key: INZO_TRUST_PROXY
+        value: true
