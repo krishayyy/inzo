@@ -1,8 +1,7 @@
 {
-  "name": "@inzo/sandbox",
+  "name": "inzo-sandbox",
   "version": "0.1.0",
   "description": "Local Docker-based sandbox for executing agent-proposed actions in isolation.",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,5 +28,26 @@
     "typescript": "^5.5.4",
     "vitest": "^2.0.5",
     "@types/node": "^20.14.15"
-  }
+  },
+  "license": "Apache-2.0",
+  "author": "Krishay Suresh",
+  "homepage": "https://github.com/krishayyy/inzo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krishayyy/inzo.git",
+    "directory": "packages/sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/krishayyy/inzo/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "ai-agents",
+    "sandbox",
+    "docker",
+    "isolation",
+    "mcp"
+  ]
 }

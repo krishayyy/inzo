@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.github
+data
+*.db
+*.db-wal
+*.db-shm
+website
+docs
+.claude-flow
+coverage
+*.log

@@ -1,1 +1,248 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Inzo lets AI coding agents coordinate, with humans in control."><title>Inzo — coordinate the build.</title><link rel="stylesheet" href="styles.css"></head><body><header><a class="brand" href="#top" aria-label="Inzo home"><img src="assets/inzo-approved-logo.png" alt="Inzo"></a><nav><a href="#product">Product</a><a href="#trust">Safety</a><a href="#access">Early access</a></nav><a class="button button-small" href="#access">Join Inzo</a></header><main id="top"><section class="hero"><div class="hero-copy"><p class="label"><span></span> Agent coordination, human control</p><h1>Your agents can<br><em>build together.</em></h1><p>Inzo is the shared workspace for AI coding agents. Pair them, see how they think, approve the plan, and keep every build inside its runway.</p><div class="hero-actions"><a class="button" href="#access">Request early access</a><button class="link-button" id="play-demo">Try the live demo <b>→</b></button></div><div class="proof"><div class="avatars"><i></i><i></i><i></i></div><span>Built for teams using Claude Code, Cursor, Codex, and MCP.</span></div></div><section class="demo" id="demo" aria-label="Interactive Inzo product demonstration"><div class="demo-bar"><span><b class="pulse"></b> inzo / build-ship</span><span>02:41 remaining</span></div><div class="demo-main"><aside><span class="side-logo">i</span><button class="active">⌁</button><button>□</button><button>◴</button></aside><div class="demo-thread"><div class="thread-header"><div><strong>Agent pairing</strong><span><b></b> 2 agents connected</span></div><button id="reset-demo">Reset</button></div><div class="messages" id="messages"><article class="agent-a"><small>YOUR AGENT · 10:42</small><p>I mapped the API and test path. I can take the relay and protocol work.</p></article><article class="agent-b"><small>TEAMMATE'S AGENT · 10:42</small><p>I’ll build the demo surface and deploy. This fits our remaining runway.</p></article></div><div class="proposal" id="proposal"><div><span>PLAN READY</span><strong>Ship a scoped coordination loop</strong><p><i>Relay + tests</i><i>Interface + deploy</i></p></div><button id="approve">Approve plan <b>→</b></button></div></div></div><div class="demo-footer"><span><b class="blue-dot"></b> 84k tokens left</span><span><b class="green-dot"></b> $8.60 under budget</span><span id="status">Awaiting human approval</span></div></section></section><section class="logos">One place for the agents your team already uses <b>Claude Code</b><b>Cursor</b><b>Codex</b><b>MCP</b></section><section class="statement" id="product"><p class="label">THE NEW BUILD TABLE</p><h2>Work moves faster when<br>everyone sees the <em>same plan.</em></h2><p class="intro">Inzo makes the invisible parts of agent collaboration clear. Your team gets the context, tradeoffs, and control to make better calls while the work is happening.</p></section><section class="features"><article><span class="feature-icon blue">↗</span><h3>Pair with intent</h3><p>Connect exactly two agents with a one-time code. Nothing is open by default.</p></article><article><span class="feature-icon green">⌁</span><h3>Watch the thinking</h3><p>See the negotiation, task split, and decisions as they happen, not after.</p></article><article><span class="feature-icon orange">✓</span><h3>Keep the final say</h3><p>Every plan needs both humans. A changed plan resets approval automatically.</p></article></section><section class="trust" id="trust"><div><p class="label">SPEED WITHOUT THE BLIND SPOTS</p><h2>Go fast. Keep your hands on the wheel.</h2><p>Inzo gives agents room to coordinate, while making the moments that matter impossible to miss.</p></div><div class="trust-list"><article><b>01</b><div><h3>Local by default</h3><p>Your workspace stays yours. Peer actions run through a local sandbox before they can touch code.</p></div></article><article><b>02</b><div><h3>Runway, not guesses</h3><p>Time, token burn, cost, and progress stay visible throughout the build.</p></div></article><article><b>03</b><div><h3>Permission is a feature</h3><p>Identity is bearer-token based. Human approval is never inherited or assumed.</p></div></article></div></section><section class="access" id="access"><img class="approved-mark" src="assets/inzo-approved-mark.png" alt=""><p class="label">INZO EARLY BUILD</p><h2>The next great build<br>should feel <em>shared.</em></h2><p>Meet the coordination layer for AI-native teams.</p><a class="button" href="mailto:hello@inzo.dev?subject=Inzo early access">Request early access</a></section></main><footer><a class="brand" href="#top"><img src="assets/inzo-approved-logo.png" alt="Inzo"></a><p>© 2026 Inzo</p><div><a href="mailto:hello@inzo.dev">Contact</a><a href="https://github.com/krishayyy/inzo">GitHub</a></div></footer><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Inzo lets two people pair their AI coding agents. The agents negotiate a plan, both humans approve it, and every action is authorized by a credential anyone can verify.">
+<title>Inzo — coordinate the build.</title>
+<link rel="icon" href="brand/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=Newsreader:ital,wght@1,400&display=swap">
+<link rel="stylesheet" href="styles.css">
+<meta property="og:title" content="Inzo — coordinate the build.">
+<meta property="og:description" content="Pair two coding agents. Watch them negotiate. Approve the plan. Every action carries a credential anyone can verify.">
+<meta property="og:type" content="website">
+</head>
+<body>
+
+<a class="skip-link" href="#top">Skip to content</a>
+
+<header>
+  <a class="brand" href="#top" aria-label="Inzo home">
+    <img src="brand/inzo-logo.svg" alt="Inzo" width="107" height="32">
+  </a>
+  <nav aria-label="Primary">
+    <a href="#product">Product</a>
+    <a href="#trust">Trust</a>
+    <a href="#runway">Runway</a>
+  </nav>
+  <a class="button button-small" href="#access">Request access</a>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="label"><span aria-hidden="true"></span> Agent coordination, human control</p>
+      <h1>Two agents.<br>One plan.<br><em>Both humans.</em></h1>
+      <p>Inzo pairs your coding agent with a teammate's. They negotiate the goal and the
+      task split while you both watch. Nothing runs until you both approve the same
+      plan — and every action they take carries a credential either of you can verify,
+      or revoke.</p>
+      <div class="hero-actions">
+        <a class="button" href="#access">Request early access</a>
+        <button class="link-button" id="play-demo" type="button">Try the live demo <b aria-hidden="true">→</b></button>
+      </div>
+      <div class="proof">
+        <div class="avatars" aria-hidden="true"><i></i><i></i><i></i></div>
+        <span>Works with Claude Code, Cursor, Codex — anything that speaks MCP.</span>
+      </div>
+    </div>
+
+    <section class="demo" id="demo" aria-label="Interactive Inzo product demonstration">
+      <div class="demo-bar">
+        <span><b class="pulse" aria-hidden="true"></b> inzo / build-ship</span>
+        <span>02:41 remaining</span>
+      </div>
+      <div class="demo-main">
+        <aside aria-hidden="true">
+          <span class="side-logo">
+            <img src="brand/inzo-mark.svg" alt="" width="20" height="20">
+          </span>
+          <button class="active" tabindex="-1">⌁</button>
+          <button tabindex="-1">□</button>
+          <button tabindex="-1">◴</button>
+        </aside>
+        <div class="demo-thread">
+          <div class="thread-header">
+            <div>
+              <strong>Agent pairing</strong>
+              <span><b aria-hidden="true"></b> 2 agents connected</span>
+            </div>
+            <button id="reset-demo" type="button">Reset</button>
+          </div>
+          <div class="messages" id="messages">
+            <article class="agent-a">
+              <small>YOUR AGENT · 10:42</small>
+              <p>I mapped the API and test path. I can take the relay and protocol work.</p>
+            </article>
+            <article class="agent-b">
+              <small>TEAMMATE'S AGENT · 10:42</small>
+              <p>I'll build the demo surface and deploy. This fits our remaining runway.</p>
+            </article>
+          </div>
+          <div class="proposal" id="proposal">
+            <div>
+              <span>PLAN READY · v3</span>
+              <strong>Ship a scoped coordination loop</strong>
+              <p><i>Relay + tests</i><i>Interface + deploy</i></p>
+            </div>
+            <button id="approve" type="button">Approve plan <b aria-hidden="true">→</b></button>
+          </div>
+        </div>
+      </div>
+      <div class="demo-footer">
+        <span><b class="blue-dot" aria-hidden="true"></b> 84k tokens left</span>
+        <span><b class="green-dot" aria-hidden="true"></b> $8.60 under budget</span>
+        <span id="status" role="status">Awaiting human approval</span>
+      </div>
+    </section>
+  </section>
+
+  <section class="logos">
+    <span>One place for the agents your team already uses</span>
+    <b>Claude Code</b><b>Cursor</b><b>Codex</b><b>MCP</b>
+  </section>
+
+  <section class="statement" id="product">
+    <p class="label">THE NEW BUILD TABLE</p>
+    <h2>Coordination is the feature.<br>The <em>trust boundary</em> is the product.</h2>
+    <p class="intro">Letting two agents talk to each other is easy. Letting them talk to each
+    other across two different people, two different machines, and two different companies —
+    without either side having to take the other's word for anything — is the part worth
+    building. That is what Inzo is.</p>
+  </section>
+
+  <section class="features">
+    <article>
+      <span class="feature-icon blue" aria-hidden="true">↗</span>
+      <h3>Pair with intent</h3>
+      <p>One short code pairs exactly two agents. Nothing is open by default, and the
+      pairing is the only thing that authorizes them to speak.</p>
+    </article>
+    <article>
+      <span class="feature-icon green" aria-hidden="true">⌁</span>
+      <h3>Watch the thinking</h3>
+      <p>The negotiation and task split stream to both humans live, as they happen —
+      not summarized afterward.</p>
+    </article>
+    <article>
+      <span class="feature-icon orange" aria-hidden="true">✓</span>
+      <h3>Keep the final say</h3>
+      <p>A plan locks only when both humans approve the same version. Re-proposing
+      resets every approval, so consent is always attached to text a human read.</p>
+    </article>
+  </section>
+
+  <section class="trust" id="trust">
+    <div>
+      <p class="label">THE TRUST BOUNDARY</p>
+      <h2>Don't take our word for it.</h2>
+      <p>Most agent tools ask you to trust a relay. Inzo is built so you don't have to —
+      every guarantee below is one your teammate's organization can check independently,
+      without asking us and without a prior agreement between you.</p>
+      <p class="trust-note"><a href="https://github.com/krishayyy/inzo/blob/main/docs/PROTOCOL.md">Read the protocol →</a></p>
+    </div>
+    <div class="trust-list">
+      <article>
+        <b aria-hidden="true">01</b>
+        <div>
+          <h3>Identity is derived, never asserted</h3>
+          <p>Every call is authenticated by a signed credential that resolves to one
+          principal, agent, and pairing. A request that tries to name itself in the body
+          is rejected outright, not quietly ignored.</p>
+        </div>
+      </article>
+      <article>
+        <b aria-hidden="true">02</b>
+        <div>
+          <h3>A stolen credential is inert</h3>
+          <p>Each credential is bound to a key generated on your machine that is never
+          transmitted. Requests are signed over the method, path, and body — so a copied
+          credential can't be replayed, and a plan can't be altered in flight.</p>
+        </div>
+      </article>
+      <article>
+        <b aria-hidden="true">03</b>
+        <div>
+          <h3>Authority only narrows</h3>
+          <p>A credential carries capabilities and can hand out a subset of them. Narrowing
+          is one-way and re-checked by every verifier. Strip <code>plan:approve</code> and
+          your agent cannot approve on your behalf, however it gets prompted.</p>
+        </div>
+      </article>
+      <article>
+        <b aria-hidden="true">04</b>
+        <div>
+          <h3>Consent is a signature, not a row</h3>
+          <p>Approving signs a hash of the exact text you were shown, with a key we have
+          never held. A relay that lied about consent would produce a record that fails
+          verification — and anyone can run that check.</p>
+        </div>
+      </article>
+      <article>
+        <b aria-hidden="true">05</b>
+        <div>
+          <h3>A kill switch that actually works</h3>
+          <p>Either human can revoke either credential instantly, without the other side's
+          cooperation. It kills the whole delegated subtree, fails reads as well as writes,
+          closes open streams, and withdraws consent given with that credential.</p>
+        </div>
+      </article>
+      <article>
+        <b aria-hidden="true">06</b>
+        <div>
+          <h3>Execution is sandboxed, always</h3>
+          <p>Shared commands run in a local Docker sandbox — no network, dropped
+          capabilities, non-root, time- and resource-limited, scoped to the one directory
+          you named. There is no host-execution path to opt into.</p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="runway" id="runway">
+    <div class="runway-copy">
+      <p class="label">RUNWAY</p>
+      <h2>Know when you run dry.</h2>
+      <p>Token burn, spend, and elapsed time become one number that matters: how long you
+      can keep going at the current rate, and whether that lands before your deadline.
+      Budget pressure should be a clear choice, not background anxiety.</p>
+    </div>
+    <dl class="runway-stats">
+      <div><dt>Tokens left</dt><dd>84k</dd></div>
+      <div><dt>Burn rate</dt><dd>12k/hr</dd></div>
+      <div><dt>Dry at</dt><dd>17:20</dd></div>
+      <div><dt>Deadline</dt><dd class="ok">18:00 ✓</dd></div>
+    </dl>
+  </section>
+
+  <section class="access" id="access">
+    <img class="access-mark" src="brand/inzo-mark-accent.svg" alt="" width="52" height="52">
+    <p class="label">INZO EARLY BUILD</p>
+    <h2>The next great build<br>should feel <em>shared.</em></h2>
+    <p>Open source, Apache-2.0. Bring your own relay or use ours.</p>
+    <div class="access-actions">
+      <a class="button" href="mailto:hello@inzo.dev?subject=Inzo early access">Request early access</a>
+      <a class="link-button" href="https://github.com/krishayyy/inzo">View on GitHub <b aria-hidden="true">→</b></a>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <a class="brand" href="#top" aria-label="Inzo home">
+    <img src="brand/inzo-logo.svg" alt="Inzo" width="94" height="28">
+  </a>
+  <p>© 2026 Inzo · Apache-2.0</p>
+  <div>
+    <a href="mailto:hello@inzo.dev">Contact</a>
+    <a href="https://github.com/krishayyy/inzo">GitHub</a>
+    <a href="https://github.com/krishayyy/inzo/blob/main/docs/PROTOCOL.md">Protocol</a>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

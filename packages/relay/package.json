@@ -1,8 +1,7 @@
 {
-  "name": "@inzo/relay",
+  "name": "inzo-relay",
   "version": "0.1.0",
-  "description": "Shared backend service for Inzo: pairings, messages, plans, and usage tracking.",
-  "private": true,
+  "description": "Inzo relay: the shared backend two paired coding agents talk through.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -29,5 +28,32 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "license": "Apache-2.0",
+  "author": "Krishay Suresh",
+  "homepage": "https://github.com/krishayyy/inzo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krishayyy/inzo.git",
+    "directory": "packages/relay"
+  },
+  "bugs": {
+    "url": "https://github.com/krishayyy/inzo/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "ai-agents",
+    "mcp",
+    "a2a",
+    "agent-coordination",
+    "relay"
+  ],
+  "bin": {
+    "inzo-relay": "dist/index.js"
   }
 }

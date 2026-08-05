@@ -1,0 +1,87 @@
+import type { Message, MinePairing, Plan, Runway } from "./api.js";
+
+const useColor = process.env.NO_COLOR === undefined && process.stdout.isTTY === true;
+
+const wrap = (code: string) => (text: string) => (useColor ? `\u001b[${code}m${text}\u001b[0m` : text);
+
+export const style = {
+  dim: wrap("2"),
+  bold: wrap("1"),
+  red: wrap("31"),
+  green: wrap("32"),
+  yellow: wrap("33"),
+  cyan: wrap("36"),
+};
+
+export function clock(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+export function shortAgent(agentId: string): string {
+  return agentId.startsWith("agent_") ? agentId.slice(0, 14) : agentId;
+}
+
+export function formatMessage(message: Message, selfAgentId: string): string {
+  const mine = message.fromAgentId === selfAgentId;
+  const who = mine ? style.cyan("your agent") : style.yellow("peer agent");
+  return `${style.dim(clock(message.createdAt))}  ${who}  ${message.body}`;
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 0) return `${formatDuration(-ms)} ago`;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function formatPlan(plan: Plan | null, selfAgentId: string, peerAgentId: string): string {
+  if (!plan) return style.dim("No plan proposed yet.");
+
+  const approvals = [selfAgentId, peerAgentId].map((agentId) => {
+    const label = agentId === selfAgentId ? "you" : "peer";
+    // Never signal state by color alone — the glyph carries it too.
+    return plan.approvedBy.includes(agentId) ? style.green(`[x] ${label}`) : style.dim(`[ ] ${label}`);
+  });
+
+  const status = plan.locked ? style.green("LOCKED") : style.yellow("AWAITING APPROVAL");
+  const lines = [
+    `${style.bold(plan.goal)}  ${style.dim(`(v${plan.version})`)}  ${status}`,
+    ...plan.items.map((item) => `  - ${item.owner === selfAgentId ? "you" : "peer"}: ${item.task}`),
+    `  ${approvals.join("   ")}`,
+  ];
+  return lines.join("\n");
+}
+
+export function formatRunway(runway: Runway): string {
+  const parts: string[] = [];
+  if (runway.msRemaining !== null) {
+    const left = formatDuration(runway.msRemaining);
+    parts.push(runway.msRemaining < 0 ? style.red(`deadline ${left}`) : `${left} to deadline`);
+  }
+  if (runway.tokensRemaining !== null) parts.push(`${runway.tokensRemaining.toLocaleString()} tokens left`);
+  if (runway.costRemainingUsd !== null) parts.push(`$${runway.costRemainingUsd.toFixed(2)} left`);
+  if (runway.burn) parts.push(style.dim(`${Math.round(runway.burn.tokensPerMin).toLocaleString()} tok/min`));
+
+  const verdict =
+    runway.onTrack === false ? style.red(runway.verdict) : runway.onTrack ? style.green(runway.verdict) : style.dim(runway.verdict);
+  return `${parts.length ? parts.join("  ·  ") + "\n" : ""}${verdict}`;
+}
+
+export function formatPairing(pairing: MinePairing): string {
+  const lines = [
+    `${style.bold("Pairing")} ${pairing.id}`,
+    `  you   ${shortAgent(pairing.agentId)}  ${pairing.revoked ? style.red("REVOKED") : style.green("active")}`,
+    `  peer  ${shortAgent(pairing.peerAgentId)}  ${pairing.peerRevoked ? style.red("REVOKED") : style.green("active")}`,
+  ];
+  const dropped = ["commands:run", "plan:approve", "plan:propose", "messages:send"].filter(
+    (scope) => !pairing.peerScope.includes(scope),
+  );
+  if (dropped.length > 0) {
+    lines.push(`  ${style.dim(`peer has given up: ${dropped.join(", ")}`)}`);
+  }
+  return lines.join("\n");
+}
+
+export function heading(text: string): string {
+  return `\n${style.bold(text)}\n${style.dim("-".repeat(text.length))}`;
+}
