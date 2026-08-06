@@ -5,7 +5,7 @@ import { createApp } from "./app.js";
 import { RelayStore } from "./lib/store.js";
 
 export { createApp, type AppOptions } from "./app.js";
-export { RelayStore, type BudgetInput, type UsageInput } from "./lib/store.js";
+export { RelayStore, type BudgetInput, type Digest, type UsageInput } from "./lib/store.js";
 export { relayEvents, type RelayEvent, type Revocation } from "./lib/events.js";
 export { computeRunway, foldUsage } from "./lib/runway.js";
 export { FailureLimiter } from "./lib/rateLimit.js";

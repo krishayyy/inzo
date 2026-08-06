@@ -235,6 +235,7 @@ Two consequences worth knowing:
 | `POST /pairings/:id/consent/withdraw` | v3 | Pull your approval, unilaterally |
 | `POST /consent/verify` | none | Re-derive `satisfied` from signatures, without trusting us |
 | `GET /pairings/:id/audit` | v3/v2 | Hash-chained log + chain validity |
+| `GET /pairings/:id/digest?limit=` | v3/v2 | Bounded-size catch-up: plan, consent, runway, and just the last `limit` (≤50) messages — costs about the same whether you missed 5 messages or 500 |
 
 Known limits, stated plainly:
 

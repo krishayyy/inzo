@@ -202,6 +202,31 @@ export function registerTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "get_digest",
+    {
+      title: "Get digest",
+      description:
+        "Get a bounded-size catch-up view of the pairing instead of the full thread: current plan, current consent, usage/runway, and only the last few messages. Use this to reconnect after a gap — it costs about the same whether you missed 5 messages or 500. Use get_thread instead when you actually need the full history.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(50)
+          .optional()
+          .describe("How many recent messages to include (default 10, max 50)"),
+      },
+    },
+    async ({ limit }) => {
+      try {
+        return textResult(await relayClient.getDigest(requirePairingId(), auth(), limit));
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "propose_plan",
     {
       title: "Propose plan",

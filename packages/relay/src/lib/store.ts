@@ -172,6 +172,16 @@ export interface BudgetInput {
   costBudgetUsd?: number | null;
 }
 
+/** Bounded-size catch-up view of a pairing. See `RelayStore.getDigest`. */
+export interface Digest {
+  pairingId: string;
+  generatedAt: string;
+  plan: Plan | null;
+  consent: ConsentRecord | null;
+  usage: UsageSnapshot;
+  recentMessages: Message[];
+}
+
 export class RelayStore {
   private readonly db: DatabaseType;
   /** The v3 trust boundary: signed credentials, consent, audit. Deliberately a
@@ -837,6 +847,36 @@ export class RelayStore {
     const usage = foldUsage(pairingId, [pairing.agentA, pairing.agentB], reports);
     const runway = computeRunway(this.getBudget(pairingId), usage, reports, now);
     return { usage, runway };
+  }
+
+  /**
+   * A bounded-size catch-up view of a pairing: current plan, current
+   * consent, usage/runway, and only the last `limit` messages — not the
+   * full thread. §Digest
+   *
+   * The point is cost that doesn't grow with how long a pairing has been
+   * running. `getMessages` is what you page through for the full history;
+   * this is what an agent reconnecting after a gap asks for instead, so
+   * catching up costs roughly the same whether it missed 5 messages or 500.
+   */
+  getDigest(pairingId: string, limit = 10): Digest {
+    const pairing = this.getPairing(pairingId);
+    return {
+      pairingId,
+      generatedAt: new Date().toISOString(),
+      plan: this.getPlan(pairingId),
+      consent: this.credentials.getConsent(pairingId),
+      usage: this.getUsageSnapshot(pairingId),
+      recentMessages: this.getRecentMessages(pairing.id, limit),
+    };
+  }
+
+  /** Most recent `limit` messages, oldest first — the tail of the thread. */
+  private getRecentMessages(pairingId: string, limit: number): Message[] {
+    const rows = this.db
+      .prepare(`SELECT *, rowid AS cursor FROM messages WHERE pairing_id = ? ORDER BY rowid DESC LIMIT ?`)
+      .all(pairingId, limit) as MessageRow[];
+    return rows.reverse().map(this.rowToMessage);
   }
 
   private getUsageReports(pairingId: string): UsageReport[] {

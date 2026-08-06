@@ -232,6 +232,16 @@ export interface Revocation {
   by: string;
 }
 
+/** Bounded-size catch-up view of a pairing — see relay's RelayStore.getDigest. */
+export interface Digest {
+  pairingId: string;
+  generatedAt: string;
+  plan: Plan | null;
+  consent: ConsentRecord | null;
+  usage: UsageSnapshot;
+  recentMessages: Message[];
+}
+
 export interface BudgetInput {
   deadline?: string | null;
   tokenBudget?: number | null;
@@ -293,6 +303,16 @@ export const relayClient = {
 
   getMessages(pairingId: string, auth: Auth | string, since?: number): Promise<{ messages: Message[]; cursor: number }> {
     return request("GET", `/pairings/${encodeURIComponent(pairingId)}/messages`, undefined, { since }, auth);
+  },
+
+  /**
+   * A fixed-size catch-up view instead of the full thread: current plan,
+   * current consent, usage/runway, and only the last `limit` messages. Use
+   * this to reconnect after a gap instead of paging through everything that
+   * happened while you were away.
+   */
+  getDigest(pairingId: string, auth: Auth | string, limit?: number): Promise<Digest> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/digest`, undefined, { limit }, auth);
   },
 
   proposePlan(pairingId: string, auth: Auth | string, goal: string, items: PlanItem[]): Promise<{ plan: Plan }> {

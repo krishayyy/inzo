@@ -5,6 +5,7 @@ import { requestLogger } from "./lib/logging.js";
 import { FailureLimiter } from "./lib/rateLimit.js";
 import { RelayStore } from "./lib/store.js";
 import { budgetRouter } from "./routes/budget.js";
+import { digestRouter } from "./routes/digest.js";
 import { messagesRouter } from "./routes/messages.js";
 import { pairingsRouter } from "./routes/pairings.js";
 import { planRouter } from "./routes/plan.js";
@@ -84,6 +85,7 @@ export function createApp(store: RelayStore, options: AppOptions = {}) {
   );
 
   app.use("/pairings/:id/messages", requireAuth(store), messagesRouter(store));
+  app.use("/pairings/:id/digest", requireAuth(store), digestRouter(store));
   app.use("/pairings/:id/plan", requireAuth(store), planRouter(store));
   app.use("/pairings/:id/consent", requireAuth(store), consentRouter(store));
   app.use("/pairings/:id/audit", requireAuth(store), auditRouter(store));
