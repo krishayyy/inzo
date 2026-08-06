@@ -19,6 +19,8 @@ import {
   revoked,
   unauthenticated,
   verifyProof,
+  type Assurance,
+  type AuditActor,
   type CredentialPayload,
 } from "./lib.js";
 import { PairingRoom } from "./pairingRoom.js";
@@ -132,6 +134,14 @@ function requireScope(auth: AuthContext, scope: Scope): void {
   if (!auth.scope.includes(scope)) throw insufficientScope(scope);
 }
 
+function actorFrom(auth: AuthContext): AuditActor {
+  return { principal: auth.principalId, agent: auth.agentId, credential: auth.credential?.jti ?? null };
+}
+
+function assuranceFrom(auth: AuthContext): Assurance {
+  return auth.credential ? "pop" : "bearer";
+}
+
 async function readJson(req: Request): Promise<unknown> {
   const text = await req.text();
   if (!text) return {};
@@ -191,6 +201,11 @@ async function route(req: Request, env: Env): Promise<Response> {
 
     const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(joined.pairingId));
     await room.initialize(joined.pairingId, code, joined.agentA, joined.agentB, new Date().toISOString());
+
+    const joinerAssurance: Assurance = joined.credential ? "pop" : "bearer";
+    const joinerActor: AuditActor = { principal: joined.principalId, agent: joined.agentB, credential: null };
+    await room.appendAudit("pairing.created", joinerActor, joinerAssurance, { code });
+    await room.appendAudit("pairing.joined", joinerActor, joinerAssurance, { peerAgentId: joined.agentA });
 
     return json(
       {
@@ -259,7 +274,15 @@ async function route(req: Request, env: Env): Promise<Response> {
       registry.agentPrincipal(pairingForPlan.agentB),
     ]);
     const plan = unwrap(
-      await room.proposePlan(pairingId, auth.agentId, goal ?? "", (items ?? []) as never, [principalA, principalB].filter((p): p is string => Boolean(p))),
+      await room.proposePlan(
+        pairingId,
+        auth.agentId,
+        goal ?? "",
+        (items ?? []) as never,
+        [principalA, principalB].filter((p): p is string => Boolean(p)),
+        actorFrom(auth),
+        assuranceFrom(auth),
+      ),
     );
     return json({ plan }, 201);
   }
@@ -280,7 +303,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   }
   if (sub === "consent/withdraw" && req.method === "POST") {
     if (!auth.principalId) throw badRequest("No principal associated with this credential");
-    return json({ consent: unwrap(await room.withdrawConsent(auth.principalId)) });
+    return json({ consent: unwrap(await room.withdrawConsent(auth.principalId, actorFrom(auth), assuranceFrom(auth))) });
   }
 
   if (sub === "budget" && req.method === "PUT") {
@@ -322,7 +345,24 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (result.revokedCredentialJtis.length > 0) {
       await room.withdrawByCredentials(result.revokedCredentialJtis);
     }
+    await room.appendAudit("credential.revoked", actorFrom(auth), assuranceFrom(auth), {
+      revokedAgentId: result.revokedAgentId,
+      revokedCredentials: result.revokedCredentialJtis,
+      target: target ?? "self",
+    });
     return json({ revocation: { revokedAgentId: result.revokedAgentId, revokedAt: result.revokedAt, by: auth.agentId } });
+  }
+
+  if (sub === "audit" && req.method === "GET") {
+    requireScope(auth, "messages:read");
+    const since = Number(url.searchParams.get("since") ?? 0);
+    const check = (await room.getAudit(Number.isFinite(since) ? since : 0)) as {
+      records: unknown[];
+      chainValid: boolean;
+      brokenAt: number | null;
+      head: string | null;
+    };
+    return json({ records: check.records, chainValid: check.chainValid, brokenAt: check.brokenAt, head: check.head, issuer: issuerUrl });
   }
 
   return json({ error: { code: "not_found", message: `No route for ${req.method} ${url.pathname}` } }, 404);

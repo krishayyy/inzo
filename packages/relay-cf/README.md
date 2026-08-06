@@ -51,15 +51,18 @@ second RPC hop).
 
 **Ported, tested, working:** pairing (create/join), v2 bearer auth, v3
 signed credentials + proof of possession + attenuation, messages, the
-bounded-cost digest endpoint (now includes usage/runway), plans, consent
-(signed approval + hash integrity check), budget/usage/runway tracking,
-revocation (self/peer, cascades to credential + consent withdrawal), JWKS +
-revocation-list well-known endpoints.
+bounded-cost digest endpoint (includes usage/runway), plans, consent (signed
+approval + hash integrity check), budget/usage/runway tracking, the
+hash-chained audit log (append/list/verify — `GET /pairings/:id/audit`),
+revocation (self/peer, cascades to credential + consent withdrawal, plus a
+`credential.revoked` audit entry), JWKS + revocation-list well-known
+endpoints.
 
-**Not yet ported — real, documented gaps, not silent omissions:**
-- The hash-chained audit log (`packages/relay`'s `audit.ts`) — `get_audit_log`
-  will 404 against this relay until it's ported.
-- Issuer key rotation as an operator command (exists in `packages/relay`'s CLI; not wired up here yet)
+**Not yet ported — a real, documented gap, not a silent omission:**
+- Issuer key rotation as an operator command (exists in `packages/relay`'s
+  CLI as `rotate-key`; not wired up here yet). Doesn't block normal use — it
+  only matters once a relay has been running long enough that its signing
+  key needs refreshing.
 
 ## Development
 

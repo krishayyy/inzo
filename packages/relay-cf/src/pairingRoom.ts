@@ -14,18 +14,18 @@
  * `RpcResult<T>` rather than throwing — see rpcError.ts for why). Internal
  * helpers that are never called across the RPC boundary keep normal
  * throw/catch semantics; the `OrThrow` suffix marks those.
- *
- * Deliberately NOT ported in this pass: the hash-chained audit log. A real,
- * documented gap — see packages/relay-cf/README.md — not a silent omission.
  */
 import { DurableObject } from "cloudflare:workers";
 import {
+  AUDIT_SCHEMA,
   badRequest,
   computeRunway,
   CONSENT_SCHEMA,
   foldUsage,
   forbidden,
   generateId,
+  GENESIS_HASH,
+  hashRecord,
   isSatisfied,
   notFound,
   planSubjectHash,
@@ -33,6 +33,10 @@ import {
   stalePlan,
   verifyApprovalSignature,
   type Approval,
+  type Assurance,
+  type AuditAction,
+  type AuditActor,
+  type AuditRecord,
   type ConsentRecord,
   type ConsentRow,
   type CredentialPayload,
@@ -103,7 +107,20 @@ CREATE TABLE IF NOT EXISTS usage_reports (
 );
 
 ${CONSENT_SCHEMA}
+${AUDIT_SCHEMA}
 `;
+
+interface AuditRow {
+  pairing_id: string;
+  seq: number;
+  at: string;
+  actor: string;
+  action: string;
+  assurance: string;
+  detail: string;
+  prev_hash: string;
+  hash: string;
+}
 
 interface BudgetRow {
   pairing_id: string;
@@ -311,7 +328,15 @@ export class PairingRoom extends DurableObject<Env> {
    * principal IDs via Registry) rather than fetched here, so this object
    * never needs to call out to another Durable Object mid-request.
    */
-  proposePlan(pairingId: string, proposedBy: string, goal: string, items: PlanItem[], principals: string[]): RpcResult<Plan> {
+  proposePlan(
+    pairingId: string,
+    proposedBy: string,
+    goal: string,
+    items: PlanItem[],
+    principals: string[],
+    actor: AuditActor,
+    assurance: Assurance,
+  ): RpcResult<Plan> {
     return rpcSafe(() => {
       if (typeof goal !== "string" || !goal.trim()) throw badRequest("goal is required");
       if (!Array.isArray(items) || items.length === 0) throw badRequest("items must be a non-empty array of { owner, task }");
@@ -358,6 +383,7 @@ export class PairingRoom extends DurableObject<Env> {
         });
       }
 
+      this.appendAudit("plan.proposed", actor, assurance, { version, subjectHash: planSubjectHash(plan) });
       return plan;
     });
   }
@@ -413,19 +439,26 @@ export class PairingRoom extends DurableObject<Env> {
         const approvals = [...current.approvals.filter((entry) => entry.principal !== approval.principal), approval];
         consentRecord = { ...current, approvals, satisfied: isSatisfied({ required: current.required, approvals }), updatedAt: approval.at };
         this.writeConsent(consentRecord);
+
+        const approvalActor: AuditActor = { principal: consent.payload.prn, agent: consent.payload.sub, credential: consent.payload.jti };
+        this.appendAudit("consent.approved", approvalActor, "pop", { version: plan.version, subjectHash: expected });
+        if (consentRecord.satisfied) {
+          this.appendAudit("consent.satisfied", approvalActor, "pop", { version: plan.version, subjectHash: expected });
+        }
       }
 
       return consentRecord ? { ...plan, consent: consentRecord } : plan;
     });
   }
 
-  withdrawConsent(principalId: string): RpcResult<ConsentRecord> {
+  withdrawConsent(principalId: string, actor: AuditActor, assurance: Assurance): RpcResult<ConsentRecord> {
     return rpcSafe(() => {
       const current = this.getConsentOrThrow();
       if (!current) throw notFound(`No consent record for pairing`);
       const approvals = current.approvals.filter((entry) => entry.principal !== principalId);
       const next: ConsentRecord = { ...current, approvals, satisfied: isSatisfied({ required: current.required, approvals }), updatedAt: new Date().toISOString() };
       this.writeConsent(next);
+      this.appendAudit("consent.withdrawn", actor, assurance, { principal: principalId });
       return next;
     });
   }
@@ -539,6 +572,104 @@ export class PairingRoom extends DurableObject<Env> {
     const usage = foldUsage(pairing.id, [pairing.agentA, pairing.agentB], reports);
     const runway = computeRunway(this.getBudgetOrThrow(), usage, reports, now);
     return { usage, runway };
+  }
+
+  // -----------------------------------------------------------------------
+  // Audit log — append-only, hash-chained. Mirrors packages/relay's
+  // AuditLog (PROTOCOL.md §7): `hash = SHA256(prevHash ++ canonical(record
+  // without hash))`, so tampering, reordering, or deleting any record breaks
+  // every hash after it. `verify()` is the check that makes the log worth
+  // anything — an auditor recomputes the chain from genesis and any edit
+  // surfaces as the seq where recomputation first diverges.
+  // -----------------------------------------------------------------------
+
+  private auditHeadOrThrow(): AuditRecord | null {
+    const row = [...this.ctx.storage.sql.exec(`SELECT * FROM audit_records ORDER BY seq DESC LIMIT 1`)][0] as unknown as
+      | AuditRow
+      | undefined;
+    return row ? this.rowToAuditRecord(row) : null;
+  }
+
+  private rowToAuditRecord(row: AuditRow): AuditRecord {
+    return {
+      seq: row.seq,
+      at: row.at,
+      pairingId: row.pairing_id,
+      actor: JSON.parse(row.actor) as AuditActor,
+      action: row.action as AuditAction,
+      assurance: row.assurance as Assurance,
+      detail: JSON.parse(row.detail) as Record<string, unknown>,
+      prevHash: row.prev_hash,
+      hash: row.hash,
+    };
+  }
+
+  /**
+   * Appends one record to this pairing's chain. Called internally by the
+   * methods above at every trust-relevant transition (plan proposed,
+   * consent approved, etc.), and directly by the Worker for events that
+   * originate outside this DO (a pairing forming in Registry, a credential
+   * revoked in Registry).
+   */
+  appendAudit(action: AuditAction, actor: AuditActor, assurance: Assurance, detail: Record<string, unknown> = {}): AuditRecord {
+    const pairing = this.getPairingOrThrow();
+    const head = this.auditHeadOrThrow();
+    const unhashed: Omit<AuditRecord, "hash"> = {
+      seq: (head?.seq ?? 0) + 1,
+      at: new Date().toISOString(),
+      pairingId: pairing.id,
+      actor,
+      action,
+      assurance,
+      detail,
+      prevHash: head?.hash ?? GENESIS_HASH,
+    };
+    const record: AuditRecord = { ...unhashed, hash: hashRecord(unhashed) };
+
+    this.ctx.storage.sql.exec(
+      `INSERT INTO audit_records (pairing_id, seq, at, actor, action, assurance, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      record.pairingId,
+      record.seq,
+      record.at,
+      JSON.stringify(record.actor),
+      record.action,
+      record.assurance,
+      JSON.stringify(record.detail),
+      record.prevHash,
+      record.hash,
+    );
+    return record;
+  }
+
+  /**
+   * `GET /pairings/:id/audit` — the requested slice (`since`), plus whether
+   * the FULL chain still checks out from genesis. Verification always covers
+   * everything regardless of `since`: a caller paging through recent records
+   * still learns if history before their window was tampered with.
+   */
+  getAudit(since = 0): { records: AuditRecord[]; chainValid: boolean; brokenAt: number | null; head: string | null } {
+    const sliceRows = [...this.ctx.storage.sql.exec(`SELECT * FROM audit_records WHERE seq > ? ORDER BY seq ASC`, since)] as unknown as AuditRow[];
+    const records = sliceRows.map((row) => this.rowToAuditRecord(row));
+
+    const allRows = [...this.ctx.storage.sql.exec(`SELECT * FROM audit_records ORDER BY seq ASC`)] as unknown as AuditRow[];
+    let prevHash = GENESIS_HASH;
+    let expectedSeq = 1;
+    let brokenAt: number | null = null;
+    for (const row of allRows) {
+      const record = this.rowToAuditRecord(row);
+      if (record.seq !== expectedSeq || record.prevHash !== prevHash) {
+        brokenAt = record.seq;
+        break;
+      }
+      const { hash, ...rest } = record;
+      if (hashRecord(rest) !== hash) {
+        brokenAt = record.seq;
+        break;
+      }
+      prevHash = hash;
+      expectedSeq += 1;
+    }
+    return { records, chainValid: brokenAt === null, brokenAt, head: brokenAt === null && allRows.length ? prevHash : null };
   }
 
   // -----------------------------------------------------------------------

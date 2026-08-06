@@ -260,3 +260,56 @@ describe("budget + usage + runway", () => {
     expect(digest.body.usage.runway.tokensRemaining).toBe(600);
   });
 });
+
+describe("audit log", () => {
+  it("records pairing.created and pairing.joined on join, chained from genesis", async () => {
+    const { pairingId, a } = await pairV2();
+    const res = await get(`/pairings/${pairingId}/audit`, a.auth);
+    expect(res.status).toBe(200);
+    expect(res.body.chainValid).toBe(true);
+    expect(res.body.brokenAt).toBeNull();
+    expect(res.body.records.map((r: { action: string }) => r.action)).toEqual(["pairing.created", "pairing.joined"]);
+    expect(res.body.records[0].seq).toBe(1);
+    expect(res.body.records[0].prevHash).toMatch(/^sha256:0{64}$/);
+  });
+
+  it("chainValid stays true as more records are appended, and each hash links to the previous", async () => {
+    const { pairingId, a } = await pairV2();
+    await post(`/pairings/${pairingId}/messages`, { body: "hi" }, a.auth); // messages are not audited, should not appear
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+
+    const res = await get(`/pairings/${pairingId}/audit`, a.auth);
+    expect(res.body.chainValid).toBe(true);
+    const actions = res.body.records.map((r: { action: string }) => r.action);
+    expect(actions).toEqual(["pairing.created", "pairing.joined", "plan.proposed"]);
+
+    for (let i = 1; i < res.body.records.length; i++) {
+      expect(res.body.records[i].prevHash).toBe(res.body.records[i - 1].hash);
+      expect(res.body.records[i].seq).toBe(res.body.records[i - 1].seq + 1);
+    }
+  });
+
+  it("supports paging with `since` while still verifying the full chain", async () => {
+    const { pairingId, a } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+
+    const full = await get(`/pairings/${pairingId}/audit`, a.auth);
+    expect(full.body.records).toHaveLength(3);
+
+    const since = await get(`/pairings/${pairingId}/audit?since=2`, a.auth);
+    expect(since.body.records).toHaveLength(1);
+    expect(since.body.records[0].action).toBe("plan.proposed");
+    // Verification still covers records before the requested window.
+    expect(since.body.chainValid).toBe(true);
+  });
+
+  it("records credential.revoked on revoke", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(`/pairings/${pairingId}/revoke`, { target: "peer" }, a.auth);
+    const res = await get(`/pairings/${pairingId}/audit`, a.auth);
+    const revoked = res.body.records.find((r: { action: string }) => r.action === "credential.revoked");
+    expect(revoked).toBeDefined();
+    expect(revoked.detail.target).toBe("peer");
+    void b;
+  });
+});
