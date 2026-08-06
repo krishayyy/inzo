@@ -307,6 +307,24 @@ export class Registry extends DurableObject<Env> {
   }
 
   /**
+   * Every credential's holder key, ever issued for a pairing, keyed by jti —
+   * for `POST /consent/verify`, which lets a third party independently
+   * re-derive a consent record's `satisfied` flag from the signatures
+   * themselves rather than trusting ours. Returned as a plain object, not a
+   * Map: this crosses the RPC boundary as a return value (structured-clones
+   * fine either way) and then straight into a JSON response either way.
+   */
+  holderKeysFor(pairingId: string): Record<string, Jwk> {
+    const rows = [...this.ctx.storage.sql.exec(`SELECT jti, cnf_jwk FROM credentials WHERE pairing_id = ?`, pairingId)] as Array<{
+      jti: string;
+      cnf_jwk: string;
+    }>;
+    const out: Record<string, Jwk> = {};
+    for (const row of rows) out[row.jti] = JSON.parse(row.cnf_jwk) as Jwk;
+    return out;
+  }
+
+  /**
    * Resolves a credential minted by `POST /pairings` (before a pairing
    * exists, so its signed JWS payload carries `pairing: null` forever — a
    * JWS cannot be edited after signing). `bindPairing` updates this row's

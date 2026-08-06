@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
+import { createPrivateKey, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { bodyHashOf, generateHolderKeyPair, signProof } from "../src/lib.js";
+import { bodyHashOf, generateHolderKeyPair, signProof, type ConsentRecord } from "../src/lib.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function post(path: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
@@ -36,6 +37,31 @@ async function pairV2() {
     pairingId: joined.body.pairingId as string,
     a: { auth: { Authorization: `Bearer ${created.body.agentToken}` } },
     b: { auth: { Authorization: `Bearer ${joined.body.agentToken}` } },
+  };
+}
+
+/** Builds the Inzo + proof headers for a signed v3 request, the same way the CLI/mcp-server holder does. */
+function v3Headers(credential: string, privateKeyPem: string, method: string, path: string, body: unknown = undefined) {
+  const jti = JSON.parse(Buffer.from(credential.split(".")[1], "base64url").toString()).jti as string;
+  const now = Math.floor(Date.now() / 1000);
+  // A random nonce so two calls in the same wall-clock second (common in a
+  // fast test) don't produce byte-identical proofs and trip the real replay
+  // guard — the same reason the wire protocol carries Inzo-Proof-Nonce.
+  const nonce = Math.random().toString(36).slice(2);
+  const proof = signProof(privateKeyPem, method, path, jti, now, bodyHashOf(body), nonce);
+  return { Authorization: `Inzo ${credential}`, "Inzo-Proof": proof, "Inzo-Proof-At": String(now), "Inzo-Proof-Nonce": nonce };
+}
+
+/** Creates a v3 (signed-credential) pairing and returns both sides' credential + holder key material. */
+async function pairV3() {
+  const holderA = generateHolderKeyPair();
+  const holderB = generateHolderKeyPair();
+  const created = await post("/pairings", { cnf: { jwk: holderA.publicJwk } });
+  const joined = await post(`/pairings/${created.body.code}/join`, { cnf: { jwk: holderB.publicJwk } });
+  return {
+    pairingId: joined.body.pairingId as string,
+    a: { credential: created.body.credential as string, privateKeyPem: holderA.privateKeyPem },
+    b: { credential: joined.body.credential as string, privateKeyPem: holderB.privateKeyPem },
   };
 }
 
@@ -569,5 +595,113 @@ describe("SSE stream", () => {
     expect(revokedEvent.event).toBe("pairing.revoked");
     await stream.close();
     void b;
+  });
+});
+
+/** Signs a plan approval statement with a holder's private key, matching consentStatement() in consent.ts. */
+function signApproval(privateKeyPem: string, pairingId: string, subject: { kind: string; version: number; hash: string }): string {
+  const statement = ["inzo-consent-v3", pairingId, subject.kind, String(subject.version), subject.hash].join("\n");
+  const key = createPrivateKey(privateKeyPem);
+  return Buffer.from(sign(null, Buffer.from(statement), key)).toString("base64url");
+}
+
+describe("POST /credentials/attenuate", () => {
+  it("mints a child credential with a narrowed capability set", async () => {
+    const { a } = await pairV3();
+    const childHolder = generateHolderKeyPair();
+    const path = "/credentials/attenuate";
+    const body = { cap: ["messages:read"], cnf: { jwk: childHolder.publicJwk } };
+    const res = await post(path, body, v3Headers(a.credential, a.privateKeyPem, "POST", path, body));
+    expect(res.status).toBe(201);
+    expect(res.body.cap).toEqual(["messages:read"]);
+    expect(res.body.depth).toBe(1);
+  });
+
+  it("rejects widening beyond the parent's own capabilities", async () => {
+    const { a } = await pairV3();
+    const path = "/credentials/attenuate";
+
+    const childHolder = generateHolderKeyPair();
+    const narrowedBody = { cap: ["messages:read"], cnf: { jwk: childHolder.publicJwk } };
+    const child = await post(path, narrowedBody, v3Headers(a.credential, a.privateKeyPem, "POST", path, narrowedBody));
+    expect(child.status).toBe(201);
+
+    // The child only holds messages:read — asking it to mint a grandchild with plan:approve must fail.
+    const grandchildBody = { cap: ["messages:read", "plan:approve"], cnf: { jwk: generateHolderKeyPair().publicJwk } };
+    const res = await post(path, grandchildBody, v3Headers(child.body.credential, childHolder.privateKeyPem, "POST", path, grandchildBody));
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects attenuation from a bearer (v2) credential", async () => {
+    const { a } = await pairV2();
+    const res = await post("/credentials/attenuate", { cap: ["messages:read"], cnf: { jwk: generateHolderKeyPair().publicJwk } }, a.auth);
+    expect(res.status).toBe(400);
+  });
+
+  it("records a credential.attenuated audit entry", async () => {
+    const { pairingId, a } = await pairV3();
+    const path = "/credentials/attenuate";
+    const body = { cap: ["messages:read"], cnf: { jwk: generateHolderKeyPair().publicJwk } };
+    await post(path, body, v3Headers(a.credential, a.privateKeyPem, "POST", path, body));
+
+    const auditPath = `/pairings/${pairingId}/audit`;
+    const audit = await get(auditPath, v3Headers(a.credential, a.privateKeyPem, "GET", auditPath));
+    const entry = audit.body.records.find((r: { action: string }) => r.action === "credential.attenuated");
+    expect(entry).toBeDefined();
+  });
+});
+
+describe("POST /consent/verify", () => {
+  it("independently confirms a satisfied consent record using known holder keys", async () => {
+    const { pairingId, a, b } = await pairV3();
+    const proposePath = `/pairings/${pairingId}/plan`;
+    const proposeBody = { goal: "ship it", items: [{ owner: "a", task: "build" }] };
+    await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
+
+    const consentPath = `/pairings/${pairingId}/consent`;
+    const consentBefore = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+    const subject = consentBefore.body.consent.subject;
+
+    const approvePath = `/pairings/${pairingId}/plan/approve`;
+    const approveBodyA = { planVersion: 1, signature: signApproval(a.privateKeyPem, pairingId, subject) };
+    await post(approvePath, approveBodyA, v3Headers(a.credential, a.privateKeyPem, "POST", approvePath, approveBodyA));
+    const approveBodyB = { planVersion: 1, signature: signApproval(b.privateKeyPem, pairingId, subject) };
+    await post(approvePath, approveBodyB, v3Headers(b.credential, b.privateKeyPem, "POST", approvePath, approveBodyB));
+
+    const consent = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+    expect(consent.body.consent.satisfied).toBe(true);
+
+    const verified = await post("/consent/verify", { consent: consent.body.consent });
+    expect(verified.status).toBe(200);
+    expect(verified.body.valid).toBe(true);
+    expect(verified.body.satisfied).toBe(true);
+  });
+
+  it("rejects a malformed consent record", async () => {
+    const res = await post("/consent/verify", { consent: { pairingId: "x" } });
+    expect(res.status).toBe(400);
+  });
+
+  it("reports invalid when the signature doesn't match the supplied holder key", async () => {
+    const { pairingId, a } = await pairV3();
+    const proposePath = `/pairings/${pairingId}/plan`;
+    const proposeBody = { goal: "ship it", items: [{ owner: "a", task: "build" }] };
+    await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
+    const consentPath = `/pairings/${pairingId}/consent`;
+    const consent = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+
+    const jti = JSON.parse(Buffer.from(a.credential.split(".")[1], "base64url").toString()).jti as string;
+    const forged: ConsentRecord = {
+      pairingId,
+      subject: consent.body.consent.subject,
+      required: consent.body.consent.required,
+      approvals: [{ principal: consent.body.consent.required[0], credential: jti, at: new Date().toISOString(), signature: "not-a-real-signature" }],
+      satisfied: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const res = await post("/consent/verify", { consent: forged });
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
   });
 });

@@ -14,14 +14,17 @@ import {
   forbidden,
   identityNotAllowed,
   insufficientScope,
+  parseCnf,
   ProofReplayGuard,
   proofInvalid,
   proofStale,
   revoked,
   unauthenticated,
+  verifyConsentRecord,
   verifyProof,
   type Assurance,
   type AuditActor,
+  type ConsentRecord,
   type CredentialPayload,
 } from "./lib.js";
 import { PairingRoom } from "./pairingRoom.js";
@@ -246,7 +249,7 @@ async function route(req: Request, env: Env): Promise<Response> {
     });
   }
 
-  if (parts[0] !== "pairings" && parts[0] !== "credentials") {
+  if (parts[0] !== "pairings" && parts[0] !== "credentials" && parts[0] !== "consent") {
     return json({ error: { code: "not_found", message: `No route for ${req.method} ${url.pathname}` } }, 404);
   }
 
@@ -294,11 +297,39 @@ async function route(req: Request, env: Env): Promise<Response> {
 
   // POST /credentials/attenuate
   if (req.method === "POST" && parts.length === 2 && parts[0] === "credentials" && parts[1] === "attenuate") {
-    const body = (await readJson(req)) as { cap: unknown; cnf: { jwk: import("./lib.js").Jwk }; ttl?: number };
+    const body = (await readJson(req)) as { cap: unknown; cnf: unknown; ttl?: number };
     const auth = await authenticate(req, body, registry);
-    if (!auth.credential) throw unauthenticated("Attenuation requires a v3 signed credential, not a bearer token");
-    const issued = unwrap(await registry.attenuateFrom(auth.credential, { cap: body.cap, cnf: body.cnf, ttlSeconds: body.ttl }));
+    if (!auth.credential) throw badRequest("Attenuation requires a v3 credential; a bearer token has no chain to extend");
+    if (body.cap === undefined) throw badRequest("cap is required (the capabilities to keep)");
+    const cnf = parseCnf(body.cnf);
+    const issued = unwrap(await registry.attenuateFrom(auth.credential, { cap: body.cap, cnf, ttlSeconds: body.ttl }));
+    if (auth.pairingId) {
+      const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(auth.pairingId));
+      await room.appendAudit("credential.attenuated", actorFrom(auth), assuranceFrom(auth), {
+        child: issued.payload.jti,
+        cap: issued.payload.cap,
+        depth: issued.payload.depth,
+      });
+    }
     return json({ credential: issued.credential, jti: issued.payload.jti, cap: issued.payload.cap, depth: issued.payload.depth, expiresAt: new Date(issued.payload.exp * 1000).toISOString() }, 201);
+  }
+
+  // POST /consent/verify — unauthenticated, on purpose. Lets a third party
+  // handed a consent record out-of-band re-derive `satisfied` from the
+  // signatures themselves rather than believing our flag. That independence
+  // is the entire reason approvals are signed in the first place.
+  if (req.method === "POST" && parts.length === 2 && parts[0] === "consent" && parts[1] === "verify") {
+    const requestBody = (await readJson(req)) as { consent?: ConsentRecord; holderKeys?: Record<string, import("./lib.js").Jwk> };
+    const record = requestBody.consent;
+    if (!record?.pairingId || !record.subject || !Array.isArray(record.approvals)) {
+      throw badRequest("consent must be a consent record with pairingId, subject, required and approvals");
+    }
+    const known = await registry.holderKeysFor(record.pairingId);
+    // Callers may supply holder keys themselves — the point is that this
+    // check does not depend on our storage. Supplied keys win on conflict.
+    const supplied = new Map<string, import("./lib.js").Jwk>(Object.entries(known));
+    for (const [jti, jwk] of Object.entries(requestBody.holderKeys ?? {})) supplied.set(jti, jwk);
+    return json(verifyConsentRecord(record, supplied));
   }
 
   // GET /pairings/mine — the creator polls this after sharing their code to
