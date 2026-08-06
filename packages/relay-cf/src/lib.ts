@@ -6,3 +6,4 @@ export * from "../../relay/src/lib/scopes.js";
 export * from "../../relay/src/lib/consent.js";
 export * from "../../relay/src/lib/errors.js";
 export * from "../../relay/src/lib/ids.js";
+export * from "../../relay/src/lib/runway.js";

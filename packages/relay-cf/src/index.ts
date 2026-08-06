@@ -283,6 +283,36 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json({ consent: unwrap(await room.withdrawConsent(auth.principalId)) });
   }
 
+  if (sub === "budget" && req.method === "PUT") {
+    const budget = unwrap(await room.setBudget(auth.agentId, (rawBody ?? {}) as never));
+    return json({ budget });
+  }
+  if (sub === "budget" && req.method === "GET") {
+    return json({ budget: await room.getBudget() });
+  }
+
+  if (sub === "usage" && req.method === "POST") {
+    requireScope(auth, "usage:report");
+    const { tokensUsed, costUsd, wallClockMs, progressPct } = (rawBody ?? {}) as {
+      tokensUsed?: number;
+      costUsd?: number;
+      wallClockMs?: number;
+      progressPct?: number;
+    };
+    unwrap(
+      await room.reportUsage(auth.agentId, {
+        tokensUsed: tokensUsed ?? 0,
+        costUsd: costUsd ?? 0,
+        wallClockMs: wallClockMs ?? 0,
+        progressPct: progressPct ?? 0,
+      }),
+    );
+    return json(await room.getUsageSnapshot(), 201);
+  }
+  if (sub === "usage" && req.method === "GET") {
+    return json(await room.getUsageSnapshot());
+  }
+
   if (sub === "revoke" && req.method === "POST") {
     const { target } = (rawBody ?? {}) as { target?: "self" | "peer" };
     const pairing = unwrap(await room.getPairing());

@@ -47,17 +47,18 @@ returned values structured-clone fully; thrown ones don't. The Worker calls
 the boundary, where duck-typing status/code works fine (same realm, no
 second RPC hop).
 
-## What's ported vs. not (this pass)
+## What's ported vs. not
 
 **Ported, tested, working:** pairing (create/join), v2 bearer auth, v3
 signed credentials + proof of possession + attenuation, messages, the
-bounded-cost digest endpoint, plans, consent (signed approval + hash
-integrity check), revocation (self/peer, cascades to credential + consent
-withdrawal), JWKS + revocation-list well-known endpoints.
+bounded-cost digest endpoint (now includes usage/runway), plans, consent
+(signed approval + hash integrity check), budget/usage/runway tracking,
+revocation (self/peer, cascades to credential + consent withdrawal), JWKS +
+revocation-list well-known endpoints.
 
 **Not yet ported — real, documented gaps, not silent omissions:**
-- Budget/usage/runway tracking (`packages/relay`'s `budget.ts`/`usage.ts`/`runway.ts`)
-- The hash-chained audit log (`packages/relay`'s `audit.ts`)
+- The hash-chained audit log (`packages/relay`'s `audit.ts`) — `get_audit_log`
+  will 404 against this relay until it's ported.
 - Issuer key rotation as an operator command (exists in `packages/relay`'s CLI; not wired up here yet)
 
 ## Development

@@ -15,14 +15,15 @@
  * helpers that are never called across the RPC boundary keep normal
  * throw/catch semantics; the `OrThrow` suffix marks those.
  *
- * Deliberately NOT ported in this pass: budget/usage/runway tracking and the
- * hash-chained audit log. Both are real, documented gaps — see
- * packages/relay-cf/README.md — not silent omissions.
+ * Deliberately NOT ported in this pass: the hash-chained audit log. A real,
+ * documented gap — see packages/relay-cf/README.md — not a silent omission.
  */
 import { DurableObject } from "cloudflare:workers";
 import {
   badRequest,
+  computeRunway,
   CONSENT_SCHEMA,
+  foldUsage,
   forbidden,
   generateId,
   isSatisfied,
@@ -37,7 +38,23 @@ import {
   type CredentialPayload,
 } from "./lib.js";
 import { rpcSafe, type RpcResult } from "./rpcError.js";
-import type { Message, Pairing, Plan, PlanItem } from "./types.js";
+import type { Budget, CombinedUsage, Message, Pairing, Plan, PlanItem, UsageReport, UsageSnapshot } from "./types.js";
+
+function normalizeDeadline(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") throw badRequest("deadline must be an ISO-8601 string or null");
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw badRequest(`deadline "${value}" is not a valid ISO-8601 timestamp`);
+  return parsed.toISOString();
+}
+
+function normalizeNumber(value: unknown, name: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || Number.isNaN(value) || value < 0) {
+    throw badRequest(`${name} must be a non-negative number or null`);
+  }
+  return value;
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS pairing (
@@ -67,8 +84,44 @@ CREATE TABLE IF NOT EXISTS plans (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS budgets (
+  pairing_id TEXT PRIMARY KEY,
+  deadline TEXT,
+  token_budget INTEGER,
+  cost_budget_usd REAL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usage_reports (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  tokens_used INTEGER NOT NULL,
+  cost_usd REAL NOT NULL,
+  wall_clock_ms INTEGER NOT NULL,
+  progress_pct REAL NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 ${CONSENT_SCHEMA}
 `;
+
+interface BudgetRow {
+  pairing_id: string;
+  deadline: string | null;
+  token_budget: number | null;
+  cost_budget_usd: number | null;
+  updated_at: string;
+}
+
+interface UsageRow {
+  id: string;
+  agent_id: string;
+  tokens_used: number;
+  cost_usd: number;
+  wall_clock_ms: number;
+  progress_pct: number;
+  created_at: string;
+}
 
 interface PlanRow {
   pairing_id: string;
@@ -87,6 +140,7 @@ export interface Digest {
   generatedAt: string;
   plan: Plan | null;
   consent: ConsentRecord | null;
+  usage: UsageSnapshot;
   recentMessages: Message[];
 }
 
@@ -389,6 +443,105 @@ export class PairingRoom extends DurableObject<Env> {
   }
 
   // -----------------------------------------------------------------------
+  // Budget + usage + runway
+  // -----------------------------------------------------------------------
+
+  setBudget(agentId: string, input: { deadline?: unknown; tokenBudget?: unknown; costBudgetUsd?: unknown }): RpcResult<Budget> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, agentId);
+
+      const existing = this.getBudgetOrThrow();
+      const next: Budget = {
+        pairingId: pairing.id,
+        deadline: "deadline" in input ? normalizeDeadline(input.deadline) : (existing?.deadline ?? null),
+        tokenBudget: "tokenBudget" in input ? normalizeNumber(input.tokenBudget, "tokenBudget") : (existing?.tokenBudget ?? null),
+        costBudgetUsd: "costBudgetUsd" in input ? normalizeNumber(input.costBudgetUsd, "costBudgetUsd") : (existing?.costBudgetUsd ?? null),
+        updatedAt: new Date().toISOString(),
+      };
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO budgets (pairing_id, deadline, token_budget, cost_budget_usd, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(pairing_id) DO UPDATE SET
+           deadline = excluded.deadline, token_budget = excluded.token_budget,
+           cost_budget_usd = excluded.cost_budget_usd, updated_at = excluded.updated_at`,
+        next.pairingId,
+        next.deadline,
+        next.tokenBudget,
+        next.costBudgetUsd,
+        next.updatedAt,
+      );
+      return next;
+    });
+  }
+
+  private getBudgetOrThrow(): Budget | null {
+    const pairing = this.getPairingOrThrow();
+    const row = [...this.ctx.storage.sql.exec(`SELECT * FROM budgets WHERE pairing_id = ?`, pairing.id)][0] as unknown as BudgetRow | undefined;
+    return row
+      ? { pairingId: pairing.id, deadline: row.deadline, tokenBudget: row.token_budget, costBudgetUsd: row.cost_budget_usd, updatedAt: row.updated_at }
+      : null;
+  }
+
+  getBudget(): Budget | null {
+    return this.getBudgetOrThrow();
+  }
+
+  reportUsage(agentId: string, input: { tokensUsed: number; costUsd: number; wallClockMs: number; progressPct: number }): RpcResult<UsageReport> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, agentId);
+
+      const { tokensUsed, costUsd, wallClockMs, progressPct } = input;
+      for (const [name, value] of Object.entries({ tokensUsed, costUsd, wallClockMs, progressPct })) {
+        if (typeof value !== "number" || Number.isNaN(value) || value < 0) throw badRequest(`${name} must be a non-negative number`);
+      }
+      if (progressPct > 100) throw badRequest("progressPct must be between 0 and 100");
+
+      const usage: UsageReport = { id: generateId("usage"), pairingId: pairing.id, agentId, tokensUsed, costUsd, wallClockMs, progressPct, createdAt: new Date().toISOString() };
+      this.ctx.storage.sql.exec(
+        `INSERT INTO usage_reports (id, agent_id, tokens_used, cost_usd, wall_clock_ms, progress_pct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        usage.id,
+        usage.agentId,
+        usage.tokensUsed,
+        usage.costUsd,
+        usage.wallClockMs,
+        usage.progressPct,
+        usage.createdAt,
+      );
+      return usage;
+    });
+  }
+
+  private getUsageReports(pairingId: string): UsageReport[] {
+    const rows = [...this.ctx.storage.sql.exec(`SELECT * FROM usage_reports ORDER BY created_at ASC, rowid ASC`)] as unknown as UsageRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      pairingId,
+      agentId: row.agent_id,
+      tokensUsed: row.tokens_used,
+      costUsd: row.cost_usd,
+      wallClockMs: row.wall_clock_ms,
+      progressPct: row.progress_pct,
+      createdAt: row.created_at,
+    }));
+  }
+
+  getUsage(): CombinedUsage {
+    const pairing = this.getPairingOrThrow();
+    return foldUsage(pairing.id, [pairing.agentA, pairing.agentB], this.getUsageReports(pairing.id));
+  }
+
+  /** Usage plus the runway derived from it — what agents actually plan against. */
+  getUsageSnapshot(now: number = Date.now()): UsageSnapshot {
+    const pairing = this.getPairingOrThrow();
+    const reports = this.getUsageReports(pairing.id);
+    const usage = foldUsage(pairing.id, [pairing.agentA, pairing.agentB], reports);
+    const runway = computeRunway(this.getBudgetOrThrow(), usage, reports, now);
+    return { usage, runway };
+  }
+
+  // -----------------------------------------------------------------------
   // Digest — bounded-size catch-up, mirrors packages/relay's getDigest
   // -----------------------------------------------------------------------
 
@@ -398,6 +551,7 @@ export class PairingRoom extends DurableObject<Env> {
       return {
         pairingId: pairing.id,
         generatedAt: new Date().toISOString(),
+        usage: this.getUsageSnapshot(),
         plan: this.getPlan(),
         consent: this.getConsentOrThrow(),
         recentMessages: this.getRecentMessages(pairing.id, limit),

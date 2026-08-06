@@ -13,7 +13,7 @@ import { buildAuthHeaders } from "inzo-holder";
  * INZO_RELAY_URL to point at a self-hosted relay (e.g. local dev, or your own
  * Fly deployment) instead.
  */
-const RELAY_URL = process.env.INZO_RELAY_URL ?? "https://inzo-relay.onrender.com";
+const RELAY_URL = process.env.INZO_RELAY_URL ?? "https://inzo-relay-cf.krishaysuresh1.workers.dev";
 
 /**
  * How a request proves who is making it.

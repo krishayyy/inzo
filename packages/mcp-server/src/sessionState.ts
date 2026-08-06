@@ -132,7 +132,7 @@ export function setPairingId(pairingId: string): void {
  * viewer, not break the agent's pairing. Failures are swallowed deliberately —
  * but never with the token in the error path.
  */
-export function writeSessionFile(relayUrl = process.env.INZO_RELAY_URL ?? "https://inzo-relay.onrender.com"): boolean {
+export function writeSessionFile(relayUrl = process.env.INZO_RELAY_URL ?? "https://inzo-relay-cf.krishaysuresh1.workers.dev"): boolean {
   if (!sessionState.agentToken) return false;
   const target = sessionFilePath();
   const payload: SessionFile = {

@@ -17,6 +17,16 @@ async function get(path: string, headers: Record<string, string> = {}): Promise<
   return { status: res.status, body: await res.json() };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function put(path: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
+  const res = await SELF.fetch(`https://relay.test${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
 /** Creates a v2 (bearer) pairing and returns both sides' auth headers. */
 async function pairV2() {
   const created = await post("/pairings");
@@ -198,5 +208,55 @@ describe("revocation", () => {
     expect(r2.body.revocation.revokedAt).toBe(r1.body.revocation.revokedAt);
     void first;
     void b2;
+  });
+});
+
+describe("budget + usage + runway", () => {
+  it("returns a null budget and a no-budget runway verdict before anything is set", async () => {
+    const { pairingId, a } = await pairV2();
+    const budget = await get(`/pairings/${pairingId}/budget`, a.auth);
+    expect(budget.body.budget).toBeNull();
+
+    const usage = await get(`/pairings/${pairingId}/usage`, a.auth);
+    expect(usage.body.runway.onTrack).toBeNull();
+    expect(usage.body.usage.totals).toEqual({ tokensUsed: 0, costUsd: 0, wallClockMs: 0 });
+  });
+
+  it("sets a budget, leaving unspecified fields untouched on a partial update", async () => {
+    const { pairingId, a } = await pairV2();
+    const first = await put(`/pairings/${pairingId}/budget`, { tokenBudget: 100000 }, a.auth);
+    expect(first.status).toBe(200);
+    expect(first.body.budget.tokenBudget).toBe(100000);
+    expect(first.body.budget.deadline).toBeNull();
+
+    const second = await put(`/pairings/${pairingId}/budget`, { costBudgetUsd: 5 }, a.auth);
+    expect(second.body.budget.tokenBudget).toBe(100000);
+    expect(second.body.budget.costBudgetUsd).toBe(5);
+  });
+
+  it("folds usage reports into totals and reflects them in the runway", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await put(`/pairings/${pairingId}/budget`, { tokenBudget: 1000 }, a.auth);
+    await post(`/pairings/${pairingId}/usage`, { tokensUsed: 300, costUsd: 1, wallClockMs: 1000, progressPct: 30 }, a.auth);
+    await post(`/pairings/${pairingId}/usage`, { tokensUsed: 200, costUsd: 0.5, wallClockMs: 500, progressPct: 20 }, b.auth);
+
+    const usage = await get(`/pairings/${pairingId}/usage`, a.auth);
+    expect(usage.body.usage.totals.tokensUsed).toBe(500);
+    expect(usage.body.runway.tokensRemaining).toBe(500);
+  });
+
+  it("rejects a negative usage value", async () => {
+    const { pairingId, a } = await pairV2();
+    const res = await post(`/pairings/${pairingId}/usage`, { tokensUsed: -1, costUsd: 0, wallClockMs: 0, progressPct: 0 }, a.auth);
+    expect(res.status).toBe(400);
+  });
+
+  it("includes usage/runway in the digest", async () => {
+    const { pairingId, a } = await pairV2();
+    await put(`/pairings/${pairingId}/budget`, { tokenBudget: 1000 }, a.auth);
+    await post(`/pairings/${pairingId}/usage`, { tokensUsed: 400, costUsd: 0, wallClockMs: 0, progressPct: 0 }, a.auth);
+    const digest = await get(`/pairings/${pairingId}/digest`, a.auth);
+    expect(digest.body.usage.usage.totals.tokensUsed).toBe(400);
+    expect(digest.body.usage.runway.tokensRemaining).toBe(600);
   });
 });
