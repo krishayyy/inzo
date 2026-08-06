@@ -1,0 +1,21 @@
+{
+  "name": "inzo-relay-cf",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inzo relay on Cloudflare Workers + Durable Objects — free-tier, always-on alternative to the Node/SQLite relay in packages/relay.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.0.0"
+  }
+}
