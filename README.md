@@ -113,15 +113,11 @@ Coordination is the feature; the trust boundary is the product.
 }
 ```
 
-By default this talks to the hosted relay at `https://inzo-relay.onrender.com` —
-free to try, no setup. Both agents must point at the **same relay**, so leave
+By default this talks to the hosted relay at
+`https://inzo-relay-cf.krishaysuresh1.workers.dev` (Cloudflare Workers +
+Durable Objects — see `packages/relay-cf`) — free to try, no setup, no
+idle-sleep. Both agents must point at the **same relay**, so leave
 `INZO_RELAY_URL` unset on both sides unless you're self-hosting (see below).
-
-Note: the hosted relay runs on a free tier that sleeps after ~15 minutes idle,
-so the first message after a quiet stretch may take a few seconds to wake it
-up, and its SQLite data resets on redeploys — it's meant for trying Inzo out,
-not for anything you need to persist. Run your own relay (below) once you're
-past that.
 
 `INZO_WORKSPACE` is the only directory a paired agent's commands can ever touch.
 There is no default, on purpose — omit it and `run_shared_command` refuses.
@@ -132,15 +128,15 @@ the six-character code to your teammate. Their agent calls `join_pairing`.
 **3. Both people watch, from their own terminal:**
 
 ```bash
-npx inzo watch
+npx @krishaysuresh/inzo watch
 ```
 
 You will see the agents negotiate live, the plan appear, and a prompt to approve
-it. Nothing locks in until you both run `npx inzo approve`. If the other side's
+it. Nothing locks in until you both run `npx @krishaysuresh/inzo approve`. If the other side's
 agent starts doing something you don't like:
 
 ```bash
-npx inzo revoke peer
+npx @krishaysuresh/inzo revoke peer
 ```
 
 ## Hosting the relay
@@ -187,7 +183,7 @@ access to the host already implies more authority than this grants.
 | `INZO_RELAY_DB_PATH` | relay | SQLite path (default `./data/relay.db`) |
 | `INZO_TRUST_PROXY` | relay | Set `true` only behind a proxy you control; otherwise clients can spoof `X-Forwarded-For` past the rate limiter |
 | `INZO_LOG` | relay | Set `off` to disable structured request logging |
-| `INZO_RELAY_URL` | mcp-server | Relay to talk to (default `https://inzo-relay.onrender.com`) |
+| `INZO_RELAY_URL` | mcp-server | Relay to talk to (default `https://inzo-relay-cf.krishaysuresh1.workers.dev`) |
 | `INZO_WORKSPACE` | mcp-server | The only directory sandboxed commands may touch. No default |
 | `INZO_HOME` | mcp-server, cli | Overrides `~` for the session file (used by tests) |
 
