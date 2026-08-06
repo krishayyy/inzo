@@ -27,9 +27,12 @@ import {
   gone,
   hashAgentToken,
   issueCredential,
+  FailureLimiter,
   fromJwk,
   MAX_TTL_SECONDS,
+  narrowedScope,
   notFound,
+  rateLimited,
   toJwk,
   verifyCredential,
   type CredentialPayload,
@@ -125,6 +128,7 @@ export class Registry extends DurableObject<Env> {
   private issuerKey!: IssuerKey;
   private readonly revokedJtis = new Set<string>();
   private verificationKeys = new Map<string, KeyObject>();
+  private readonly joinLimiter = new FailureLimiter();
   private ready: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -341,6 +345,33 @@ export class Registry extends DurableObject<Env> {
     };
   }
 
+  getAgentScope(agentId: string): Scope[] {
+    const row = [...this.ctx.storage.sql.exec(`SELECT scope FROM agent_tokens WHERE agent_id = ?`, agentId)][0] as
+      | { scope: string }
+      | undefined;
+    return row ? (JSON.parse(row.scope) as Scope[]) : [];
+  }
+
+  isAgentRevoked(agentId: string): boolean {
+    const row = [...this.ctx.storage.sql.exec(`SELECT revoked_at FROM agent_tokens WHERE agent_id = ?`, agentId)][0] as
+      | { revoked_at: string | null }
+      | undefined;
+    return Boolean(row?.revoked_at);
+  }
+
+  /**
+   * Permanently drops capabilities from the caller's own credential.
+   * Narrowing only — `narrowedScope` rejects anything the caller does not
+   * already hold, so this can never be used to escalate.
+   */
+  narrowScope(agentId: string, requested: unknown): RpcResult<Scope[]> {
+    return rpcSafe(() => {
+      const next = narrowedScope(requested, this.getAgentScope(agentId));
+      this.ctx.storage.sql.exec(`UPDATE agent_tokens SET scope = ? WHERE agent_id = ?`, JSON.stringify(next), agentId);
+      return next;
+    });
+  }
+
   // -----------------------------------------------------------------------
   // Pairing codes
   // -----------------------------------------------------------------------
@@ -396,14 +427,31 @@ export class Registry extends DurableObject<Env> {
    * creation are atomic from the caller's point of view — no window where a
    * code is marked used but no pairing exists yet.
    */
-  joinPairing(code: string, cnf?: { jwk: Jwk }): RpcResult<JoinedPairing> {
+  /**
+   * `clientKey` (the requester's IP, resolved by the Worker) is only ever
+   * used to throttle FAILED attempts — a code is one-shot, so a successful
+   * join can't be replayed anyway, and penalizing success would punish a
+   * whole team pairing repeatedly from one room's NAT address. Mirrors
+   * packages/relay's pairings.ts route-level limiter, just moved down a
+   * layer since relay-cf centralizes join logic in Registry.
+   */
+  joinPairing(code: string, cnf?: { jwk: Jwk }, clientKey = "unknown"): RpcResult<JoinedPairing> {
     return rpcSafe(() => {
-      const row = [...this.ctx.storage.sql.exec(`SELECT * FROM pairing_codes WHERE code = ?`, code)][0] as
-        | { code: string; creator_agent_id: string; created_at: string; expires_at: string; used_at: string | null }
-        | undefined;
-      if (!row) throw notFound(`No pairing code "${code}"`);
-      if (row.used_at) throw conflict(`Pairing code "${code}" has already been used`);
-      if (new Date(row.expires_at).getTime() < Date.now()) throw gone(`Pairing code "${code}" has expired`);
+      if (this.joinLimiter.isLimited(clientKey)) {
+        throw rateLimited("Too many failed pairing-code attempts. Wait a few minutes and try again.");
+      }
+
+      let row: { code: string; creator_agent_id: string; created_at: string; expires_at: string; used_at: string | null } | undefined;
+      try {
+        row = [...this.ctx.storage.sql.exec(`SELECT * FROM pairing_codes WHERE code = ?`, code)][0] as typeof row;
+        if (!row) throw notFound(`No pairing code "${code}"`);
+        if (row.used_at) throw conflict(`Pairing code "${code}" has already been used`);
+        if (new Date(row.expires_at).getTime() < Date.now()) throw gone(`Pairing code "${code}" has expired`);
+      } catch (err) {
+        this.joinLimiter.recordFailure(clientKey);
+        throw err;
+      }
+      this.joinLimiter.clear(clientKey);
 
       const joinerAgentId = generateId("agent");
       const agentToken = generateAgentToken();

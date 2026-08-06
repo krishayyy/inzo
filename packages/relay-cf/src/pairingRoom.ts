@@ -164,7 +164,21 @@ export interface Digest {
 /** This DO doesn't read bindings off `env` — it's fully self-contained. */
 type Env = Record<string, never>;
 
+interface StreamSubscriber {
+  agentId: string;
+  controller: ReadableStreamDefaultController<Uint8Array>;
+}
+
 export class PairingRoom extends DurableObject<Env> {
+  /**
+   * In-memory only, per warm DO instance — this is what makes "both humans
+   * watch it happen live" real instead of a polling loop, mirroring
+   * packages/relay's stream.ts (which uses a Node EventEmitter for the same
+   * purpose). Every mutating method below calls broadcast() after it commits,
+   * so a subscriber's connection is just this Set until it disconnects.
+   */
+  private readonly streamSubscribers = new Set<StreamSubscriber>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.ctx.storage.sql.exec(SCHEMA);
@@ -179,6 +193,85 @@ export class PairingRoom extends DurableObject<Env> {
       agentB,
       createdAt,
     );
+  }
+
+  // -----------------------------------------------------------------------
+  // Live stream — GET /pairings/:id/stream, forwarded here as a raw fetch()
+  // by the Worker (not an RPC method) so the connection can stay open and be
+  // written to later from addMessage/proposePlan/etc. The Worker has already
+  // authenticated the caller by the time it calls this — see index.ts.
+  // -----------------------------------------------------------------------
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const agentId = url.searchParams.get("agentId");
+    if (!agentId) return new Response("agentId is required", { status: 400 });
+    const pairing = this.getPairingOrThrow();
+
+    let subscriber: StreamSubscriber;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        subscriber = { agentId, controller };
+        this.streamSubscribers.add(subscriber);
+        controller.enqueue(
+          encoder.encode(`event: ready\ndata: ${JSON.stringify({ pairingId: pairing.id, agentId, at: new Date().toISOString() })}\n\n`),
+        );
+      },
+      cancel: () => {
+        this.streamSubscribers.delete(subscriber);
+      },
+    });
+    request.signal.addEventListener("abort", () => this.streamSubscribers.delete(subscriber));
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+        // Matches index.ts's SECURITY_HEADERS — this response bypasses the
+        // json() helper that normally applies them, so they're set here by
+        // hand. Referrer-Policy matters most on this route specifically:
+        // it's the one response that can carry a credential in the query
+        // string it was requested with.
+        "Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+      },
+    });
+  }
+
+  private broadcast(event: string, data: unknown): void {
+    if (this.streamSubscribers.size === 0) return;
+    const line = new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    for (const sub of this.streamSubscribers) {
+      try {
+        sub.controller.enqueue(line);
+      } catch {
+        this.streamSubscribers.delete(sub);
+      }
+    }
+  }
+
+  /**
+   * Ejects a revoked agent's own stream — the same fail-closed behavior the
+   * request path applies to a revoked token. Called by the Worker's revoke
+   * handler after it has already told Registry to revoke the credential.
+   */
+  broadcastRevocation(revokedAgentId: string, revokedAt: string, by: string): void {
+    this.broadcast("pairing.revoked", { revocation: { revokedAgentId, revokedAt, by } });
+    for (const sub of this.streamSubscribers) {
+      if (sub.agentId === revokedAgentId) {
+        try {
+          sub.controller.close();
+        } catch {
+          /* already closed */
+        }
+        this.streamSubscribers.delete(sub);
+      }
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -232,7 +325,9 @@ export class PairingRoom extends DurableObject<Env> {
         createdAt,
       );
       const cursor = Number([...result][0]!.cursor);
-      return { id, pairingId: pairing.id, fromAgentId, body, createdAt, cursor };
+      const message = { id, pairingId: pairing.id, fromAgentId, body, createdAt, cursor };
+      this.broadcast("message.created", { message });
+      return message;
     });
   }
 
@@ -384,6 +479,7 @@ export class PairingRoom extends DurableObject<Env> {
       }
 
       this.appendAudit("plan.proposed", actor, assurance, { version, subjectHash: planSubjectHash(plan) });
+      this.broadcast("plan.updated", { plan });
       return plan;
     });
   }
@@ -447,6 +543,7 @@ export class PairingRoom extends DurableObject<Env> {
         }
       }
 
+      this.broadcast("plan.updated", { plan });
       return consentRecord ? { ...plan, consent: consentRecord } : plan;
     });
   }
@@ -504,6 +601,7 @@ export class PairingRoom extends DurableObject<Env> {
         next.costBudgetUsd,
         next.updatedAt,
       );
+      this.broadcast("budget.updated", { budget: next });
       return next;
     });
   }
@@ -542,6 +640,9 @@ export class PairingRoom extends DurableObject<Env> {
         usage.progressPct,
         usage.createdAt,
       );
+      // Recomputed at emit time, matching packages/relay's stream.ts, so
+      // watchers get the number GET /usage would give them, not a stale copy.
+      this.broadcast("usage.reported", this.getUsageSnapshot());
       return usage;
     });
   }

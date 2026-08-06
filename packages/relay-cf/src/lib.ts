@@ -7,6 +7,7 @@ export * from "../../relay/src/lib/consent.js";
 export * from "../../relay/src/lib/errors.js";
 export * from "../../relay/src/lib/ids.js";
 export * from "../../relay/src/lib/runway.js";
+export * from "../../relay/src/lib/rateLimit.js";
 // audit.ts's AuditLog class takes a `db` typed only as better-sqlite3's
 // Database — a type-only import, erased at compile time — so the pure
 // pieces (hashRecord, GENESIS_HASH, AUDIT_SCHEMA, types) port unchanged.

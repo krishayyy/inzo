@@ -368,3 +368,206 @@ describe("key rotation (admin)", () => {
     expect(res.body.message.body).toBe("still valid after rotation");
   });
 });
+
+describe("GET /pairings/mine", () => {
+  it("returns pairing: null before anyone has joined", async () => {
+    const created = await post("/pairings");
+    const res = await get("/pairings/mine", { Authorization: `Bearer ${created.body.agentToken}` });
+    expect(res.status).toBe(200);
+    expect(res.body.pairing).toBeNull();
+  });
+
+  it("returns pairing details, including the peer's scope, once joined", async () => {
+    const { pairingId, a, b } = await pairV2();
+    void pairingId;
+    const res = await get("/pairings/mine", a.auth);
+    expect(res.status).toBe(200);
+    expect(res.body.pairing.peerScope).toEqual([
+      "messages:read",
+      "messages:send",
+      "plan:propose",
+      "plan:approve",
+      "usage:report",
+      "commands:run",
+    ]);
+    expect(res.body.pairing.revoked).toBe(false);
+    expect(res.body.pairing.peerRevoked).toBe(false);
+    void b;
+  });
+
+  it("reflects the peer's narrowed scope", async () => {
+    const { a, b } = await pairV2();
+    await post("/pairings/mine/scope", { scope: ["messages:read", "messages:send"] }, b.auth);
+    const res = await get("/pairings/mine", a.auth);
+    expect(res.body.pairing.peerScope).toEqual(["messages:read", "messages:send"]);
+  });
+
+  it("reflects peerRevoked after the peer is revoked", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(`/pairings/${pairingId}/revoke`, { target: "self" }, b.auth);
+    const res = await get("/pairings/mine", a.auth);
+    expect(res.body.pairing.peerRevoked).toBe(true);
+  });
+
+  it("requires authentication", async () => {
+    const res = await get("/pairings/mine");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /pairings/mine/scope", () => {
+  it("narrows scope and rejects widening back", async () => {
+    const created = await post("/pairings");
+    const auth = { Authorization: `Bearer ${created.body.agentToken}` };
+    const narrowed = await post("/pairings/mine/scope", { scope: ["messages:read", "messages:send"] }, auth);
+    expect(narrowed.status).toBe(200);
+    expect(narrowed.body.scope).toEqual(["messages:read", "messages:send"]);
+
+    const widen = await post("/pairings/mine/scope", { scope: ["messages:read", "messages:send", "commands:run"] }, auth);
+    expect(widen.status).toBe(400);
+  });
+
+  it("a narrowed scope is actually enforced on subsequent requests", async () => {
+    const { pairingId, a } = await pairV2();
+    await post("/pairings/mine/scope", { scope: ["messages:read"] }, a.auth);
+    const res = await post(`/pairings/${pairingId}/messages`, { body: "hi" }, a.auth);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("insufficient_scope");
+  });
+});
+
+describe("join rate limiting", () => {
+  it("does not limit a single wrong guess", async () => {
+    const res = await post("/pairings/INZO-000000/join");
+    expect(res.status).toBe(404);
+  });
+
+  it("rate-limits after enough failed guesses, and a good code still fails while limited", async () => {
+    const created = await post("/pairings");
+    for (let i = 0; i < 10; i++) {
+      await post("/pairings/INZO-000000/join");
+    }
+    const res = await post(`/pairings/${created.body.code}/join`);
+    expect(res.status).toBe(429);
+    expect(res.body.error.code).toBe("rate_limited");
+  });
+
+  it("a successful join clears the failure count", async () => {
+    for (let i = 0; i < 5; i++) {
+      await post("/pairings/INZO-000000/join");
+    }
+    const created = await post("/pairings");
+    const good = await post(`/pairings/${created.body.code}/join`);
+    expect(good.status).toBe(201);
+
+    // 5 more failures shouldn't combine with the pre-success 5 to hit the limit of 10.
+    for (let i = 0; i < 5; i++) {
+      await post("/pairings/INZO-000000/join");
+    }
+    const created2 = await post("/pairings");
+    const stillGood = await post(`/pairings/${created2.body.code}/join`);
+    expect(stillGood.status).toBe(201);
+  });
+});
+
+describe("SSE stream", () => {
+  /** Wraps a single reader over the stream's lifetime — acquiring a fresh reader per read() call fails with "already locked". */
+  function eventReader(res: Response) {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    return {
+      async next(count: number): Promise<Array<{ event: string; data: unknown }>> {
+        const events: Array<{ event: string; data: unknown }> = [];
+        while (events.length < count) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let split: number;
+          while ((split = buffer.indexOf("\n\n")) !== -1) {
+            const frame = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            const eventLine = frame.split("\n").find((l) => l.startsWith("event: "));
+            const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+            if (eventLine) {
+              events.push({ event: eventLine.slice(7), data: dataLine ? JSON.parse(dataLine.slice(6)) : undefined });
+            }
+          }
+        }
+        return events;
+      },
+      close: () => reader.cancel().catch(() => {}),
+    };
+  }
+
+  it("sends a ready event immediately on connect", async () => {
+    const { pairingId, a } = await pairV2();
+    const res = await SELF.fetch(`https://relay.test/pairings/${pairingId}/stream`, { headers: a.auth });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    const stream = eventReader(res);
+    const [ready] = await stream.next(1);
+    expect(ready.event).toBe("ready");
+    expect((ready.data as { pairingId: string }).pairingId).toBe(pairingId);
+    await stream.close();
+  });
+
+  it("pushes message.created to a connected watcher", async () => {
+    const { pairingId, a, b } = await pairV2();
+    const res = await SELF.fetch(`https://relay.test/pairings/${pairingId}/stream`, { headers: b.auth });
+    const stream = eventReader(res);
+    await stream.next(1); // ready
+
+    await post(`/pairings/${pairingId}/messages`, { body: "hi from a" }, a.auth);
+
+    const [messageEvent] = await stream.next(1);
+    expect(messageEvent.event).toBe("message.created");
+    expect((messageEvent.data as { message: { body: string } }).message.body).toBe("hi from a");
+    await stream.close();
+  });
+
+  it("pushes plan.updated when a plan is proposed", async () => {
+    const { pairingId, a } = await pairV2();
+    const res = await SELF.fetch(`https://relay.test/pairings/${pairingId}/stream`, { headers: a.auth });
+    const stream = eventReader(res);
+    await stream.next(1); // ready
+
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+
+    const [planEvent] = await stream.next(1);
+    expect(planEvent.event).toBe("plan.updated");
+    expect((planEvent.data as { plan: { goal: string } }).plan.goal).toBe("ship it");
+    await stream.close();
+  });
+
+  it("supports v2 token auth via query string (EventSource-compatible wire format)", async () => {
+    const { pairingId, a } = await pairV2();
+    const token = a.auth.Authorization.replace("Bearer ", "");
+    const res = await SELF.fetch(`https://relay.test/pairings/${pairingId}/stream?token=${token}`);
+    expect(res.status).toBe(200);
+    const stream = eventReader(res);
+    const [ready] = await stream.next(1);
+    expect(ready.event).toBe("ready");
+    await stream.close();
+  });
+
+  it("rejects a request with no credential at all", async () => {
+    const { pairingId } = await pairV2();
+    const res = await SELF.fetch(`https://relay.test/pairings/${pairingId}/stream`);
+    expect(res.status).toBe(401);
+  });
+
+  it("closes the revoked side's own stream and notifies both sides", async () => {
+    const { pairingId, a, b } = await pairV2();
+    const streamA = await SELF.fetch(`https://relay.test/pairings/${pairingId}/stream`, { headers: a.auth });
+    const stream = eventReader(streamA);
+    await stream.next(1); // ready
+
+    await post(`/pairings/${pairingId}/revoke`, { target: "self" }, a.auth);
+
+    const [revokedEvent] = await stream.next(1);
+    expect(revokedEvent.event).toBe("pairing.revoked");
+    await stream.close();
+    void b;
+  });
+});

@@ -64,6 +64,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
+  "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 };
 
 function json(body: unknown, status = 200): Response {
@@ -98,23 +99,40 @@ interface AuthContext {
   credential: CredentialPayload | null;
 }
 
-/** Faithful port of packages/relay/src/lib/auth.ts's requireAuth, against Registry RPC instead of an in-process CredentialStore. */
-async function authenticate(req: Request, body: unknown, registry: DurableObjectStub<Registry>): Promise<AuthContext> {
+/**
+ * Faithful port of packages/relay/src/lib/auth.ts's requireAuth, against
+ * Registry RPC instead of an in-process CredentialStore.
+ *
+ * `allowQueryToken` is for GET /pairings/:id/stream only — the CLI's fetch()
+ * call could set headers, but the wire format matches native EventSource
+ * (which cannot), so credential/proof ride in the query string there. The
+ * proof window is tightened to 60s on that path for the same reason the
+ * original does: query strings leak via logs and Referer more readily than
+ * headers do.
+ */
+async function authenticate(
+  req: Request,
+  body: unknown,
+  registry: DurableObjectStub<Registry>,
+  options: { allowQueryToken?: boolean } = {},
+): Promise<AuthContext> {
+  const url = new URL(req.url);
   const header = req.headers.get("authorization") ?? "";
   const inzoMatch = header.match(/^Inzo (.+)$/);
   const bearerMatch = header.match(/^Bearer (.+)$/);
+  const allowQuery = options.allowQueryToken === true;
+  const queryCredential = allowQuery ? url.searchParams.get("credential") : null;
+  const queryToken = allowQuery ? url.searchParams.get("token") : null;
 
-  if (inzoMatch) {
-    const presented = inzoMatch[1];
+  const presentedCredential = inzoMatch?.[1] ?? queryCredential;
+  if (presentedCredential) {
     // Left to propagate as-is: verifyOrThrow always throws a CredentialError
-    // shape, which errorResponse() recognizes structurally (see
-    // isCredentialErrorShape) since instanceof does not survive the RPC
-    // boundary this call just crossed.
-    const payload: CredentialPayload = unwrap(await registry.verifyOrThrow(presented));
+    // shape, which errorResponse() recognizes structurally since instanceof
+    // does not survive the RPC boundary this call just crossed.
+    const payload: CredentialPayload = unwrap(await registry.verifyOrThrow(presentedCredential));
 
-    const proof = req.headers.get("inzo-proof") ?? undefined;
-    const at = req.headers.get("inzo-proof-at") ?? undefined;
-    const url = new URL(req.url);
+    const proof = req.headers.get("inzo-proof") ?? (allowQuery ? (url.searchParams.get("proof") ?? undefined) : undefined);
+    const at = req.headers.get("inzo-proof-at") ?? (allowQuery ? (url.searchParams.get("proofAt") ?? undefined) : undefined);
     let timestamp: number;
     try {
       timestamp = verifyProof({
@@ -124,7 +142,8 @@ async function authenticate(req: Request, body: unknown, registry: DurableObject
         method: req.method,
         path: url.pathname,
         bodyHash: bodyHashOf(body),
-        nonce: req.headers.get("inzo-proof-nonce") ?? "",
+        nonce: req.headers.get("inzo-proof-nonce") ?? (allowQuery ? (url.searchParams.get("proofNonce") ?? "") : ""),
+        windowSeconds: allowQuery ? 60 : undefined,
       });
     } catch (err) {
       if (err instanceof CredentialError) throw err.code === "proof_stale" ? proofStale(err.message) : proofInvalid(err.message);
@@ -140,7 +159,7 @@ async function authenticate(req: Request, body: unknown, registry: DurableObject
     return { agentId: payload.sub, pairingId: boundPairing, scope: payload.cap, principalId: payload.prn, credential: payload };
   }
 
-  const token = bearerMatch?.[1];
+  const token = bearerMatch?.[1] ?? queryToken;
   if (!token) throw unauthenticated();
   const identity = await registry.resolveToken(token);
   if (!identity) throw unauthenticated();
@@ -244,7 +263,10 @@ async function route(req: Request, env: Env): Promise<Response> {
     const code = parts[1];
     const body = (await readJson(req)) as { cnf?: { jwk: unknown } };
     const cnf = body.cnf ? (body.cnf as { jwk: import("./lib.js").Jwk }) : undefined;
-    const joined = unwrap(await registry.joinPairing(code, cnf));
+    // Set by Cloudflare's edge, not client-controllable — no "trust proxy"
+    // configuration needed the way packages/relay's Express app requires.
+    const clientKey = req.headers.get("cf-connecting-ip") ?? "unknown";
+    const joined = unwrap(await registry.joinPairing(code, cnf, clientKey));
 
     const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(joined.pairingId));
     await room.initialize(joined.pairingId, code, joined.agentA, joined.agentB, new Date().toISOString());
@@ -279,6 +301,48 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json({ credential: issued.credential, jti: issued.payload.jti, cap: issued.payload.cap, depth: issued.payload.depth, expiresAt: new Date(issued.payload.exp * 1000).toISOString() }, 201);
   }
 
+  // GET /pairings/mine — the creator polls this after sharing their code to
+  // learn when someone joined. `pairing: null` (200, not 404) while unjoined
+  // is an expected polling state, not an error. Must be checked before the
+  // generic /pairings/:id/... dispatch below, or "mine" gets treated as a
+  // pairing id.
+  if (req.method === "GET" && parts.length === 2 && parts[0] === "pairings" && parts[1] === "mine") {
+    const auth = await authenticate(req, undefined, registry);
+    if (!auth.pairingId) return json({ pairing: null });
+    const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(auth.pairingId));
+    const pairing = unwrap(await room.getPairing());
+    const peerAgentId = await room.otherAgent(pairing, auth.agentId);
+    const [budget, peerScope, peerRevoked] = await Promise.all([
+      room.getBudget(),
+      registry.getAgentScope(peerAgentId),
+      registry.isAgentRevoked(peerAgentId),
+    ]);
+    return json({
+      pairing: {
+        id: pairing.id,
+        agentId: auth.agentId,
+        peerAgentId,
+        createdAt: pairing.createdAt,
+        budget,
+        scope: auth.scope,
+        peerScope,
+        revoked: false, // an already-revoked credential never reaches here — authenticate() rejects it first
+        peerRevoked,
+      },
+    });
+  }
+
+  // POST /pairings/mine/scope — permanently narrow this credential's own
+  // capabilities. Not under /:id because a creator can narrow before anyone
+  // has joined, when there is no pairing id yet.
+  if (req.method === "POST" && parts.length === 3 && parts[0] === "pairings" && parts[1] === "mine" && parts[2] === "scope") {
+    const body = (await readJson(req)) as { scope?: unknown };
+    const auth = await authenticate(req, body, registry);
+    if (body.scope === undefined) throw badRequest("scope is required (an array of capabilities to keep)");
+    const scope = unwrap(await registry.narrowScope(auth.agentId, body.scope));
+    return json({ scope });
+  }
+
   // Everything else is /pairings/:id/...
   if (parts[0] !== "pairings" || parts.length < 3) {
     return json({ error: { code: "not_found", message: `No route for ${req.method} ${url.pathname}` } }, 404);
@@ -286,6 +350,24 @@ async function route(req: Request, env: Env): Promise<Response> {
   const pairingId = parts[1];
   const sub = parts.slice(2).join("/");
   const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(pairingId));
+
+  // GET /pairings/:id/stream — special-cased before the generic dispatch:
+  // it accepts query-string auth (EventSource-compatible wire format, even
+  // though the CLI uses fetch()), and the response is a raw streamed
+  // Response forwarded straight from the DO's own fetch() rather than a
+  // JSON body built from an RPC call.
+  if (sub === "stream" && req.method === "GET") {
+    const streamAuth = await authenticate(req, undefined, registry, { allowQueryToken: true });
+    if (streamAuth.pairingId !== pairingId) throw forbidden("This token does not belong to the requested pairing");
+    if (!streamAuth.scope.includes("messages:read")) throw insufficientScope("messages:read");
+    // Query strings carrying a credential/proof must not reach logs or the
+    // DO's own request object — swap to a fresh internal URL that carries
+    // only the resolved agentId, never the credential this request came in
+    // with.
+    const internalUrl = new URL(req.url);
+    internalUrl.search = `?agentId=${encodeURIComponent(streamAuth.agentId)}`;
+    return room.fetch(new Request(internalUrl, { signal: req.signal }));
+  }
 
   const rawBody = req.method === "GET" ? undefined : await readJson(req);
   const auth = await authenticate(req, rawBody, registry);
@@ -397,6 +479,7 @@ async function route(req: Request, env: Env): Promise<Response> {
       revokedCredentials: result.revokedCredentialJtis,
       target: target ?? "self",
     });
+    await room.broadcastRevocation(result.revokedAgentId, result.revokedAt, auth.agentId);
     return json({ revocation: { revokedAgentId: result.revokedAgentId, revokedAt: result.revokedAt, by: auth.agentId } });
   }
 

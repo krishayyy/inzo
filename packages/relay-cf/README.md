@@ -61,18 +61,29 @@ Ed25519 key anywhere in this codebase — always go through `fromJwk()`.
 
 ## What's ported vs. not
 
-**Ported, tested, working:** pairing (create/join), v2 bearer auth, v3
-signed credentials + proof of possession + attenuation, messages, the
-bounded-cost digest endpoint (includes usage/runway), plans, consent (signed
-approval + hash integrity check), budget/usage/runway tracking, the
-hash-chained audit log (append/list/verify — `GET /pairings/:id/audit`),
-revocation (self/peer, cascades to credential + consent withdrawal, plus a
-`credential.revoked` audit entry), JWKS + revocation-list well-known
-endpoints, issuer key rotation (`POST /admin/rotate-key`, gated by the
-`INZO_ADMIN_TOKEN` secret).
+**Ported, tested, working:** pairing (create/join), `GET /pairings/mine`
+(poll for join + peer scope/revocation state) and `POST /pairings/mine/scope`
+(narrow this side's own capabilities), v2 bearer auth, v3 signed credentials
++ proof of possession + attenuation, messages, the **live SSE stream**
+(`GET /pairings/:id/stream` — this is what makes `inzo watch` real instead
+of a polling loop; pushes `message.created`/`plan.updated`/`usage.reported`/
+`budget.updated`/`pairing.revoked` to connected watchers, EventSource-
+compatible query-string auth included), the bounded-cost digest endpoint
+(includes usage/runway), plans, consent (signed approval + hash integrity
+check), budget/usage/runway tracking, the hash-chained audit log
+(append/list/verify — `GET /pairings/:id/audit`), revocation (self/peer,
+cascades to credential + consent withdrawal + a live-closed stream + a
+`credential.revoked` audit entry), pairing-code join rate limiting (in-memory
+sliding window in `Registry`, since it's the one instance every join request
+already passes through), JWKS + revocation-list well-known endpoints, issuer
+key rotation (`POST /admin/rotate-key`, gated by the `INZO_ADMIN_TOKEN`
+secret).
 
 Nothing is currently un-ported. If you add a feature to `packages/relay`,
-check whether it needs a matching port here too.
+check whether it needs a matching port here too — a first review pass after
+the initial port found the SSE stream, `/pairings/mine`, scope narrowing,
+and join rate limiting all missing despite the relay otherwise looking
+complete, so don't assume parity without actually diffing the route tables.
 
 ### Setting up key rotation
 
