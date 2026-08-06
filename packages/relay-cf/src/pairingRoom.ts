@@ -31,6 +31,7 @@ import {
   planSubjectHash,
   rowToConsent,
   stalePlan,
+  subjectHashMismatch,
   verifyApprovalSignature,
   type Approval,
   type Assurance,
@@ -523,7 +524,7 @@ export class PairingRoom extends DurableObject<Env> {
         if (!current) throw notFound(`No plan has been proposed for pairing "${pairing.id}"`);
         const expected = planSubjectHash(plan);
         if (current.subject.hash !== expected) {
-          throw badRequest(`Plan content changed under the same version — re-read the plan (expected hash ${expected}, consent has ${current.subject.hash})`);
+          throw subjectHashMismatch(expected, current.subject.hash);
         }
         if (!current.required.includes(consent.payload.prn)) {
           throw forbidden("This principal is not one of the parties whose consent is required");

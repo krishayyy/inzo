@@ -189,8 +189,18 @@ function assuranceFrom(auth: AuthContext): Assurance {
   return auth.credential ? "pop" : "bearer";
 }
 
+/** Matches packages/relay's `express.json({ limit: "128kb" })` — nothing this API accepts is large; a cap keeps a hostile body from becoming a memory problem. */
+const MAX_BODY_BYTES = 128 * 1024;
+
 async function readJson(req: Request): Promise<unknown> {
+  const declaredLength = Number(req.headers.get("content-length") ?? 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    throw { status: 413, code: "payload_too_large", message: `Request body exceeds the ${MAX_BODY_BYTES}-byte limit` };
+  }
   const text = await req.text();
+  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) {
+    throw { status: 413, code: "payload_too_large", message: `Request body exceeds the ${MAX_BODY_BYTES}-byte limit` };
+  }
   if (!text) return {};
   try {
     return JSON.parse(text);

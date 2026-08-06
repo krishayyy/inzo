@@ -1,4 +1,4 @@
-import { SELF } from "cloudflare:test";
+import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { createPrivateKey, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { bodyHashOf, generateHolderKeyPair, signProof, type ConsentRecord } from "../src/lib.js";
@@ -703,5 +703,54 @@ describe("POST /consent/verify", () => {
     const res = await post("/consent/verify", { consent: forged });
     expect(res.status).toBe(200);
     expect(res.body.valid).toBe(false);
+  });
+});
+
+describe("request body limits", () => {
+  it("rejects a body over 128kb", async () => {
+    const { pairingId, a } = await pairV2();
+    const huge = { body: "x".repeat(200 * 1024) };
+    const res = await post(`/pairings/${pairingId}/messages`, huge, a.auth);
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe("payload_too_large");
+  });
+
+  it("accepts a body comfortably under the limit", async () => {
+    const { pairingId, a } = await pairV2();
+    const res = await post(`/pairings/${pairingId}/messages`, { body: "x".repeat(1000) }, a.auth);
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("stale plan integrity check", () => {
+  it("reports stale_plan (409), not a generic bad_request, when the plan and its consent record's hashes disagree despite a matching version", async () => {
+    // Unreachable through the normal API in one request — a version is a
+    // counter that can collide across a restore or bad migration; the hash
+    // is what actually catches that. Reproduced here by corrupting the
+    // plan's stored content directly, the same way a bad migration would.
+    const { pairingId, a } = await pairV3();
+    const proposePath = `/pairings/${pairingId}/plan`;
+    const proposeBody = { goal: "ship it", items: [{ owner: "a", task: "build" }] };
+    const proposed = await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
+    expect(proposed.status).toBe(201);
+
+    // Corrupt the plan's goal in storage without touching consent_records —
+    // now planSubjectHash(currentPlan) no longer matches what's in the
+    // pairing's already-open consent record for version 1.
+    const id = env.PAIRING_ROOM.idFromName(pairingId);
+    const stub = env.PAIRING_ROOM.get(id);
+    await runInDurableObject(stub, async (_instance: unknown, state: { storage: { sql: { exec: (q: string, ...p: unknown[]) => unknown } } }) => {
+      state.storage.sql.exec(`UPDATE plans SET goal = ? WHERE pairing_id = ?`, "corrupted goal", pairingId);
+    });
+
+    const consentPath = `/pairings/${pairingId}/consent`;
+    const consent = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+    const signature = signApproval(a.privateKeyPem, pairingId, consent.body.consent.subject);
+
+    const approvePath = `/pairings/${pairingId}/plan/approve`;
+    const approveBody = { planVersion: 1, signature };
+    const res = await post(approvePath, approveBody, v3Headers(a.credential, a.privateKeyPem, "POST", approvePath, approveBody));
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("stale_plan");
   });
 });
