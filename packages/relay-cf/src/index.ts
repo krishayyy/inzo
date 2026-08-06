@@ -6,6 +6,7 @@
  * dispatches the actual operation to the right PairingRoom instance. Kept
  * deliberately thin — business rules live in the DOs, not here.
  */
+import { timingSafeEqual } from "node:crypto";
 import {
   badRequest,
   bodyHashOf,
@@ -28,11 +29,30 @@ import { Registry } from "./registry.js";
 import { unwrap } from "./rpcError.js";
 import type { Scope } from "./types.js";
 
+/** Constant-time comparison — a naive `===` on a secret leaks its value one byte at a time via timing. */
+function tokensMatch(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
 export { PairingRoom, Registry };
 
 interface Env {
   REGISTRY: DurableObjectNamespace<Registry>;
   PAIRING_ROOM: DurableObjectNamespace<PairingRoom>;
+  /**
+   * Gates POST /admin/rotate-key. Set with `wrangler secret put
+   * INZO_ADMIN_TOKEN` — never committed, never in wrangler.jsonc.
+   *
+   * The Node relay (packages/relay) makes rotation a CLI-only operator
+   * command specifically to avoid giving the single most powerful operation
+   * on the relay a network surface. A Worker has no persistent host to gate
+   * a CLI command behind — the closest equivalent here is a route that
+   * requires a secret only the person who deployed this Worker holds.
+   */
+  INZO_ADMIN_TOKEN?: string;
 }
 
 const IDENTITY_FIELDS = ["agentId", "fromAgentId", "proposedBy", "principalId"];
@@ -112,7 +132,12 @@ async function authenticate(req: Request, body: unknown, registry: DurableObject
     }
     if (!replayGuard.admit(proof!, timestamp)) throw new CredentialError("proof_replayed", "This proof was already used");
 
-    return { agentId: payload.sub, pairingId: payload.pairing, scope: payload.cap, principalId: payload.prn, credential: payload };
+    // A credential minted by POST /pairings is signed before a pairing
+    // exists, so it carries `pairing: null` forever — a JWS cannot be
+    // edited after signing. Resolve the binding here, dynamically, the same
+    // way packages/relay's auth.ts does.
+    const boundPairing = payload.pairing ?? (await registry.pairingForAgent(payload.sub));
+    return { agentId: payload.sub, pairingId: boundPairing, scope: payload.cap, principalId: payload.prn, credential: payload };
   }
 
   const token = bearerMatch?.[1];
@@ -178,6 +203,28 @@ async function route(req: Request, env: Env): Promise<Response> {
   }
   if (req.method === "GET" && parts[0] === ".well-known" && parts[1] === "inzo-revocations") {
     return json(await registry.revocationList());
+  }
+
+  // POST /admin/rotate-key — deliberately not derivable from any pairing's
+  // credential. Rotation is the single most powerful operation on the
+  // relay (§4.1); gating it on INZO_ADMIN_TOKEN keeps it out of reach of
+  // anyone who only ever holds an agent credential, however broad its scope.
+  if (req.method === "POST" && parts.length === 2 && parts[0] === "admin" && parts[1] === "rotate-key") {
+    if (!env.INZO_ADMIN_TOKEN) {
+      return json({ error: { code: "not_configured", message: "INZO_ADMIN_TOKEN is not set on this deployment; rotation is disabled" } }, 503);
+    }
+    const presented = (req.headers.get("authorization") ?? "").match(/^Bearer (.+)$/)?.[1];
+    if (!presented || !tokensMatch(presented, env.INZO_ADMIN_TOKEN)) {
+      return json({ error: { code: "unauthenticated", message: "A valid admin token is required" } }, 401);
+    }
+    const newKid = await registry.rotateIssuerKey();
+    const pruned = await registry.pruneRetiredKeys();
+    return json({
+      rotated: true,
+      newKid,
+      prunedRetiredKeys: pruned,
+      note: "Retired key stays published in the JWKS until nothing it signed can still be alive. Verifiers cache the JWKS — allow their cache TTL to pass before assuming everyone has the new key.",
+    });
   }
 
   if (parts[0] !== "pairings" && parts[0] !== "credentials") {

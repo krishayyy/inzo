@@ -27,6 +27,7 @@ import {
   gone,
   hashAgentToken,
   issueCredential,
+  fromJwk,
   MAX_TTL_SECONDS,
   notFound,
   toJwk,
@@ -174,12 +175,9 @@ export class Registry extends DurableObject<Env> {
       kid: string;
       public_jwk: string;
     }>;
-    this.verificationKeys = new Map(
-      rows.map((row) => [
-        row.kid,
-        createPublicKey({ key: JSON.parse(row.public_jwk) as Record<string, unknown>, format: "jwk" }),
-      ]),
-    );
+    // fromJwk(), not a direct createPublicKey({format:"jwk"}) call — see its
+    // comment in credential.ts for why that path is unsafe on this runtime.
+    this.verificationKeys = new Map(rows.map((row) => [row.kid, fromJwk(JSON.parse(row.public_jwk) as Jwk)]));
   }
 
   activeKid(): string {
@@ -302,6 +300,20 @@ export class Registry extends DurableObject<Env> {
       | { principal_id: string }
       | undefined;
     return row?.principal_id ?? null;
+  }
+
+  /**
+   * Resolves a credential minted by `POST /pairings` (before a pairing
+   * exists, so its signed JWS payload carries `pairing: null` forever — a
+   * JWS cannot be edited after signing). `bindPairing` updates this row's
+   * `pairing_id` once someone joins; this is how the Worker turns that into
+   * the pairing a verified credential is actually scoped to.
+   */
+  pairingForAgent(agentId: string): string | null {
+    const row = [...this.ctx.storage.sql.exec(`SELECT pairing_id FROM credentials WHERE agent_id = ? LIMIT 1`, agentId)][0] as
+      | { pairing_id: string | null }
+      | undefined;
+    return row?.pairing_id ?? null;
   }
 
   bindPairing(agentId: string, pairingId: string): void {

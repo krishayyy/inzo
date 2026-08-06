@@ -1,5 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { bodyHashOf, generateHolderKeyPair, signProof } from "../src/lib.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function post(path: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
@@ -311,5 +312,59 @@ describe("audit log", () => {
     expect(revoked).toBeDefined();
     expect(revoked.detail.target).toBe("peer");
     void b;
+  });
+});
+
+describe("key rotation (admin)", () => {
+  it("rejects a request with no token", async () => {
+    const res = await post("/admin/rotate-key");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a request with the wrong token", async () => {
+    const res = await post("/admin/rotate-key", {}, { Authorization: "Bearer wrong-token" });
+    expect(res.status).toBe(401);
+  });
+
+  it("rotates the key with the correct token, and the JWKS keeps both keys", async () => {
+    const before = await get("/.well-known/inzo-jwks");
+    const beforeKid = before.body.keys[0].kid;
+
+    const res = await post("/admin/rotate-key", {}, { Authorization: "Bearer test-admin-token" });
+    expect(res.status).toBe(200);
+    expect(res.body.rotated).toBe(true);
+    expect(res.body.newKid).not.toBe(beforeKid);
+
+    const after = await get("/.well-known/inzo-jwks");
+    const kids = after.body.keys.map((k: { kid: string }) => k.kid);
+    expect(kids).toContain(beforeKid);
+    expect(kids).toContain(res.body.newKid);
+  });
+
+  it("a v3 credential issued before rotation still verifies (and can send a message) after it", async () => {
+    const holder = generateHolderKeyPair();
+    const created = await post("/pairings", { cnf: { jwk: holder.publicJwk } });
+    expect(created.body.credential).toBeTruthy();
+    const joined = await post(`/pairings/${created.body.code}/join`);
+    const pairingId = joined.body.pairingId as string;
+
+    // Rotate — the old key that signed `created.body.credential` retires,
+    // but must still be accepted for anything issued before rotation.
+    await post("/admin/rotate-key", {}, { Authorization: "Bearer test-admin-token" });
+
+    const credential = created.body.credential as string;
+    const path = `/pairings/${pairingId}/messages`;
+    const body = { body: "still valid after rotation" };
+    const now = Math.floor(Date.now() / 1000);
+    const jti = JSON.parse(Buffer.from(credential.split(".")[1], "base64url").toString()).jti as string;
+    const proof = signProof(holder.privateKeyPem, "POST", path, jti, now, bodyHashOf(body));
+
+    const res = await post(path, body, {
+      Authorization: `Inzo ${credential}`,
+      "Inzo-Proof": proof,
+      "Inzo-Proof-At": String(now),
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.message.body).toBe("still valid after rotation");
   });
 });

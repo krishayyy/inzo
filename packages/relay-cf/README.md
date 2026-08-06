@@ -34,18 +34,30 @@ The pure protocol logic (`credential.ts`, `scopes.ts`, `consent.ts`,
 `errors.ts`, `ids.ts`) is imported directly from `packages/relay/src/lib/` —
 not forked — since none of it touches `better-sqlite3` or Express.
 
-## A real gotcha worth knowing if you touch this code
+## Two real gotchas worth knowing if you touch this code
 
-Cloudflare Workers RPC does **not** preserve custom fields on a thrown
-`Error` crossing a Durable Object boundary — only `name`/`message` survive,
-and this is true even for a plain object thrown deliberately (verified
-empirically, not assumed). `RelayError`/`CredentialError` carry `.status`/
-`.code` as real fields the Worker needs, so every public DO method that can
-fail **returns** an `RpcResult<T>` (see `rpcError.ts`) instead of throwing —
-returned values structured-clone fully; thrown ones don't. The Worker calls
-`unwrap()` to turn a failed result back into a real throw on its own side of
-the boundary, where duck-typing status/code works fine (same realm, no
-second RPC hop).
+**RPC error handling.** Cloudflare Workers RPC does **not** preserve custom
+fields on a thrown `Error` crossing a Durable Object boundary — only
+`name`/`message` survive, and this is true even for a plain object thrown
+deliberately (verified empirically, not assumed). `RelayError`/
+`CredentialError` carry `.status`/`.code` as real fields the Worker needs, so
+every public DO method that can fail **returns** an `RpcResult<T>` (see
+`rpcError.ts`) instead of throwing — returned values structured-clone fully;
+thrown ones don't. The Worker calls `unwrap()` to turn a failed result back
+into a real throw on its own side of the boundary, where duck-typing
+status/code works fine (same realm, no second RPC hop).
+
+**Ed25519 JWK reconstruction is broken on this runtime.** `createPublicKey({
+key: jwk, format: "jwk" })` for an Ed25519 OKP JWK silently reconstructs a
+*different* key than the one exported — same shape, wrong bytes, so a real
+signature made with the matching private key fails to verify. This is a
+`nodejs_compat` bug, not ours (confirmed: the same round-trip is correct on
+real Node.js). It broke every v3 signed-credential check on this relay until
+found — `fromJwk()` in `packages/relay/src/lib/credential.ts` now builds the
+Ed25519 SPKI DER by hand from the JWK's raw `x` bytes instead of using the
+JWK import path, which is verified to round-trip correctly on both runtimes.
+Never reintroduce a direct `createPublicKey({format:"jwk"})` call for an
+Ed25519 key anywhere in this codebase — always go through `fromJwk()`.
 
 ## What's ported vs. not
 
@@ -56,13 +68,29 @@ approval + hash integrity check), budget/usage/runway tracking, the
 hash-chained audit log (append/list/verify — `GET /pairings/:id/audit`),
 revocation (self/peer, cascades to credential + consent withdrawal, plus a
 `credential.revoked` audit entry), JWKS + revocation-list well-known
-endpoints.
+endpoints, issuer key rotation (`POST /admin/rotate-key`, gated by the
+`INZO_ADMIN_TOKEN` secret).
 
-**Not yet ported — a real, documented gap, not a silent omission:**
-- Issuer key rotation as an operator command (exists in `packages/relay`'s
-  CLI as `rotate-key`; not wired up here yet). Doesn't block normal use — it
-  only matters once a relay has been running long enough that its signing
-  key needs refreshing.
+Nothing is currently un-ported. If you add a feature to `packages/relay`,
+check whether it needs a matching port here too.
+
+### Setting up key rotation
+
+Rotation has no persistent host to gate a CLI command behind the way
+`packages/relay`'s does, so the equivalent here is a secret only the person
+who deployed this Worker holds:
+
+```bash
+npx wrangler secret put INZO_ADMIN_TOKEN   # paste a long random value
+```
+
+```bash
+curl -X POST https://<your-worker>.workers.dev/admin/rotate-key \
+  -H "Authorization: Bearer <the token you set>"
+```
+
+The old key stays published in the JWKS until nothing it signed can still be
+alive — rotating does not log anyone out.
 
 ## Development
 

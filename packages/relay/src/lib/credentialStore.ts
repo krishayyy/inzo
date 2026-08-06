@@ -12,6 +12,7 @@ import { createPrivateKey, createPublicKey, randomUUID, type KeyObject } from "n
 import { AuditLog, AUDIT_SCHEMA, type Assurance, type AuditAction, type AuditActor } from "./audit.js";
 import {
   attenuate,
+  fromJwk,
   generateIssuerKey,
   issueCredential,
   MAX_TTL_SECONDS,
@@ -155,12 +156,11 @@ export class CredentialStore {
       kid: string;
       public_jwk: string;
     }>;
-    this.verificationKeys = new Map(
-      rows.map((row) => [
-        row.kid,
-        createPublicKey({ key: JSON.parse(row.public_jwk) as Jwk as unknown as Record<string, unknown>, format: "jwk" }),
-      ]),
-    );
+    // fromJwk(), not a direct createPublicKey({format:"jwk"}) call — this
+    // relay also ships to a runtime (Cloudflare Workers, packages/relay-cf)
+    // where that path silently reconstructs the wrong key from a valid OKP
+    // JWK. One code path for both runtimes rather than two that can drift.
+    this.verificationKeys = new Map(rows.map((row) => [row.kid, fromJwk(JSON.parse(row.public_jwk) as Jwk)]));
   }
 
   /** The `kid` currently being signed with. */

@@ -138,12 +138,29 @@ export function toJwk(key: KeyObject): Jwk {
   return { kty: "OKP", crv: "Ed25519", x: jwk.x };
 }
 
+/**
+ * The fixed 12-byte ASN.1 prefix for an Ed25519 SubjectPublicKeyInfo (RFC
+ * 8410): SEQUENCE { SEQUENCE { OID 1.3.101.112 }, BIT STRING } with the
+ * 32-byte raw key appended as the bit string's payload.
+ */
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
 export function fromJwk(jwk: Jwk): KeyObject {
   if (jwk?.kty !== "OKP" || jwk?.crv !== "Ed25519" || typeof jwk.x !== "string") {
     throw new CredentialError("bad_request", "cnf.jwk must be an Ed25519 OKP public key");
   }
   try {
-    return createPublicKey({ key: jwk as unknown as Record<string, unknown>, format: "jwk" });
+    // Deliberately not `createPublicKey({ key: jwk, format: "jwk" })`: at
+    // least one Node-compatible runtime we ship on (Cloudflare Workers'
+    // nodejs_compat) silently reconstructs a DIFFERENT Ed25519 key from a
+    // valid OKP JWK — same shape, wrong bytes, so every signature made with
+    // the real private key fails to verify. Building the SPKI DER by hand
+    // from the raw `x` bytes sidesteps that JWK-import code path entirely;
+    // it is verified to round-trip correctly on both real Node.js and
+    // workerd.
+    const raw = Buffer.from(jwk.x, "base64url");
+    if (raw.length !== 32) throw new Error("wrong length");
+    return createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: "der", type: "spki" });
   } catch {
     throw new CredentialError("bad_request", "cnf.jwk is not a valid Ed25519 public key");
   }
