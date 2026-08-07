@@ -24,7 +24,8 @@ import {
   type UsageSnapshot,
 } from "../types.js";
 
-const PAIRING_CODE_TTL_MS = 15 * 60 * 1000;
+// Kept in sync with packages/relay-cf/src/registry.ts.
+const PAIRING_CODE_TTL_MS = 30 * 60 * 1000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS pairing_codes (

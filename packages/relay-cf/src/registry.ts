@@ -42,7 +42,10 @@ import {
 import { rpcSafe, type RpcResult } from "./rpcError.js";
 import { ALL_SCOPES, type Scope, type TokenIdentity } from "./types.js";
 
-const PAIRING_CODE_TTL_MS = 15 * 60 * 1000;
+// Long enough to survive real-world setup friction (restarting an app,
+// fixing an MCP config, one side being slow to respond) without forcing a
+// new code — see the credential TTL comment in packages/relay/src/lib/credential.ts.
+const PAIRING_CODE_TTL_MS = 30 * 60 * 1000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS issuer_keys (

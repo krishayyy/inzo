@@ -1,13 +1,14 @@
 import { DockerUnavailableError, runInSandbox } from "inzo-sandbox";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { generateHolderKeyPair, signConsent } from "inzo-holder";
+import { generateHolderKeyPair, isExpiring, publicJwkFromPem, signConsent } from "inzo-holder";
 import { relayClient, type Auth, type Scope } from "./relayClient.js";
 import {
   requireHolderKey,
   requirePairingId,
   requireToken,
   sessionState,
+  setCredential,
   setIdentity,
   setPairingId,
   setScope,
@@ -18,9 +19,29 @@ import {
  *
  * Prefers the v3 signed credential and falls back to the v2 bearer token, so a
  * session paired before v3 keeps working rather than breaking on upgrade.
+ *
+ * A v3 credential nearing expiry is silently renewed first, via attenuation
+ * to the same scope and the same holder key — narrowing to yourself is a
+ * no-op capability-wise, so this can't be used to widen anything. Without
+ * this, a pairing that's idle for longer than the credential's TTL hard-fails
+ * every tool call with no recovery but a full re-pair; a human-paced,
+ * asynchronous conversation hits that gap routinely.
  */
-function auth(): Auth | string {
+async function auth(): Promise<Auth | string> {
   if (sessionState.credential && sessionState.holderPrivateKey) {
+    if (isExpiring(sessionState.credential, 5 * 60)) {
+      try {
+        const current: Auth = { kind: "v3", credential: sessionState.credential, privateKeyPem: sessionState.holderPrivateKey };
+        const jwk = publicJwkFromPem(sessionState.holderPrivateKey);
+        const renewed = await relayClient.attenuate(current, sessionState.scope, { jwk });
+        setCredential(renewed.credential);
+      } catch {
+        // Best-effort. If the credential is already past expiry, renewal
+        // itself fails proof-of-possession — fall through with what's held
+        // so the caller gets the relay's own clear "expired" error instead
+        // of this masking it with a different failure.
+      }
+    }
     return { kind: "v3", credential: sessionState.credential, privateKeyPem: sessionState.holderPrivateKey };
   }
   return requireToken();
@@ -126,7 +147,7 @@ export function registerTools(server: McpServer): void {
     },
     async () => {
       try {
-        const { pairing } = await relayClient.getMine(auth());
+        const { pairing } = await relayClient.getMine(await auth());
         if (!pairing) {
           return textResult({
             joined: false,
@@ -152,7 +173,7 @@ export function registerTools(server: McpServer): void {
     },
     async () => {
       try {
-        const { pairing } = await relayClient.getMine(auth());
+        const { pairing } = await relayClient.getMine(await auth());
         return textResult(pairing ?? { message: "No active pairing." });
       } catch (err) {
         return errorResult(err);
@@ -171,7 +192,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ text }) => {
       try {
-        const { message } = await relayClient.sendMessage(requirePairingId(), auth(), text);
+        const { message } = await relayClient.sendMessage(requirePairingId(), await auth(), text);
         return textResult(message);
       } catch (err) {
         return errorResult(err);
@@ -194,7 +215,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ since }) => {
       try {
-        return textResult(await relayClient.getMessages(requirePairingId(), auth(), since));
+        return textResult(await relayClient.getMessages(requirePairingId(), await auth(), since));
       } catch (err) {
         return errorResult(err);
       }
@@ -219,7 +240,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ limit }) => {
       try {
-        return textResult(await relayClient.getDigest(requirePairingId(), auth(), limit));
+        return textResult(await relayClient.getDigest(requirePairingId(), await auth(), limit));
       } catch (err) {
         return errorResult(err);
       }
@@ -247,7 +268,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ goal, tasks }) => {
       try {
-        const { plan } = await relayClient.proposePlan(requirePairingId(), auth(), goal, tasks);
+        const { plan } = await relayClient.proposePlan(requirePairingId(), await auth(), goal, tasks);
         return textResult(plan);
       } catch (err) {
         return errorResult(err);
@@ -275,7 +296,7 @@ export function registerTools(server: McpServer): void {
         // Re-fetch and re-hash the plan locally. Signing a digest supplied by
         // the relay would let a hostile relay collect a signature over text
         // this side never rendered.
-        const { plan: current } = await relayClient.getPlan(pairingId, auth());
+        const { plan: current } = await relayClient.getPlan(pairingId, await auth());
         if (!current) throw new Error("No plan has been proposed yet.");
         if (current.version !== planVersion) {
           throw new Error(
@@ -291,7 +312,7 @@ export function registerTools(server: McpServer): void {
           items: current.items,
           version: current.version,
         });
-        const { plan, consent } = await relayClient.approvePlan(pairingId, auth(), planVersion, signature);
+        const { plan, consent } = await relayClient.approvePlan(pairingId, await auth(), planVersion, signature);
         if (consent) return textResult({ plan, consent });
         return textResult(plan);
       } catch (err) {
@@ -309,7 +330,7 @@ export function registerTools(server: McpServer): void {
     },
     async () => {
       try {
-        const { plan } = await relayClient.getPlan(requirePairingId(), auth());
+        const { plan } = await relayClient.getPlan(requirePairingId(), await auth());
         return textResult(plan ?? { message: "No plan has been proposed yet." });
       } catch (err) {
         return errorResult(err);
@@ -335,7 +356,7 @@ export function registerTools(server: McpServer): void {
     },
     async (input) => {
       try {
-        const { budget } = await relayClient.setBudget(requirePairingId(), auth(), input);
+        const { budget } = await relayClient.setBudget(requirePairingId(), await auth(), input);
         return textResult(budget);
       } catch (err) {
         return errorResult(err);
@@ -358,7 +379,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ tokens, cost, seconds, progressPct }) => {
       try {
-        const snapshot = await relayClient.reportUsage(requirePairingId(), auth(), {
+        const snapshot = await relayClient.reportUsage(requirePairingId(), await auth(), {
           tokensUsed: tokens,
           costUsd: cost,
           wallClockMs: Math.round(seconds * 1000),
@@ -381,7 +402,7 @@ export function registerTools(server: McpServer): void {
     },
     async () => {
       try {
-        return textResult(await relayClient.getUsage(requirePairingId(), auth()));
+        return textResult(await relayClient.getUsage(requirePairingId(), await auth()));
       } catch (err) {
         return errorResult(err);
       }
@@ -403,7 +424,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ keep }) => {
       try {
-        const { scope } = await relayClient.narrowScope(auth(), keep as Scope[]);
+        const { scope } = await relayClient.narrowScope(await auth(), keep as Scope[]);
         setScope(scope);
         return textResult({ scope, message: "Scope narrowed. This cannot be undone for this credential." });
       } catch (err) {
@@ -424,7 +445,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ target }) => {
       try {
-        const { revocation } = await relayClient.revoke(requirePairingId(), auth(), target);
+        const { revocation } = await relayClient.revoke(requirePairingId(), await auth(), target);
         return textResult({ revocation, message: `Revoked ${target}. This is permanent.` });
       } catch (err) {
         return errorResult(err);
@@ -442,7 +463,7 @@ export function registerTools(server: McpServer): void {
     },
     async () => {
       try {
-        const { consent } = await relayClient.withdrawConsent(requirePairingId(), auth());
+        const { consent } = await relayClient.withdrawConsent(requirePairingId(), await auth());
         return textResult({
           consent,
           message: "Approval withdrawn. Peer-originated work is blocked until both humans approve again.",
@@ -465,7 +486,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ since }) => {
       try {
-        return textResult(await relayClient.getAudit(requirePairingId(), auth(), since));
+        return textResult(await relayClient.getAudit(requirePairingId(), await auth(), since));
       } catch (err) {
         return errorResult(err);
       }
@@ -493,7 +514,7 @@ export function registerTools(server: McpServer): void {
     async ({ command, args, origin, timeoutSeconds }) => {
       try {
         const pairingId = requirePairingId();
-        const token = auth();
+        const token = await auth();
 
         // A peer-originated command is only allowed while the peer's own
         // credential still authorizes it. Checked live, not from cache: the
@@ -554,4 +575,7 @@ export function registerTools(server: McpServer): void {
   );
 }
 
-export { sessionState };
+// auth is exported for direct testing of its silent-refresh behavior —
+// exercising it through a full MCP transport just to reach a private
+// function buys nothing.
+export { auth, sessionState };

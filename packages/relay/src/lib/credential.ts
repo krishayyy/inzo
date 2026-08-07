@@ -22,9 +22,16 @@ import { ALL_SCOPES, type Scope } from "../types.js";
 import { badRequest } from "./errors.js";
 
 /** Hard ceiling on credential lifetime. Offline verification is only safe
- *  because a stale verifier is wrong for at most this long. §1.1 */
-export const MAX_TTL_SECONDS = 3600;
-export const DEFAULT_TTL_SECONDS = 900;
+ *  because a stale verifier is wrong for at most this long. §1.1
+ *
+ *  Sized for how pairings are actually used: two humans coordinating async
+ *  over hours, not a tight request/response loop. A shorter ceiling here
+ *  bounds revocation propagation faster, but every idle gap longer than the
+ *  default — someone steps away, comes back later — hard-fails every tool
+ *  call with no recovery but a full re-pair. That failure mode is worse than
+ *  a slower revocation bound for this threat model. */
+export const MAX_TTL_SECONDS = 8 * 60 * 60;
+export const DEFAULT_TTL_SECONDS = 2 * 60 * 60;
 
 /** §2 rule 4. An unbounded delegation chain is an unbounded audit problem. */
 export const MAX_DEPTH = 4;

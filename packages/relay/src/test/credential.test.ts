@@ -118,9 +118,9 @@ describe("credential issue and verify (§2.1)", () => {
     expect(() => verifyCredential(credential, keys, { now: Date.now() + 61_000 })).toThrow(/expired/i);
   });
 
-  it("caps lifetime at one hour however long a caller asks for", () => {
-    const { payload } = root(key, ALL, 999_999);
-    expect(payload.exp - payload.iat).toBe(3600);
+  it("caps lifetime at MAX_TTL_SECONDS however long a caller asks for", () => {
+    const { payload } = root(key, ALL, 999_999_999);
+    expect(payload.exp - payload.iat).toBe(MAX_TTL_SECONDS);
   });
 });
 

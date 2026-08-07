@@ -143,3 +143,64 @@ describe("mcp client <-> relay", () => {
     expect(pairingId).toBeTruthy();
   });
 });
+
+describe("auth() silent credential refresh", () => {
+  it("renews a credential nearing expiry before it's used, transparently to the caller", async () => {
+    const { generateHolderKeyPair } = await import("inzo-holder");
+    const { auth, sessionState } = await import("../src/tools.js");
+
+    const holder = generateHolderKeyPair();
+    const created = await client.createPairing({ jwk: holder.publicJwk });
+    if (!created.credential) throw new Error("expected a v3 credential from a cnf-bearing pairing");
+
+    // Mint a credential that's already inside auth()'s 5-minute refresh
+    // window, the same way a session that's been open for a while would end
+    // up holding one — attenuating to the identical scope, not narrowing it,
+    // so this exercises the exact renewal path auth() takes.
+    const nearlyExpired = await client.attenuate(
+      { kind: "v3", credential: created.credential, privateKeyPem: holder.privateKeyPem },
+      created.scope,
+      { jwk: holder.publicJwk },
+      60,
+    );
+
+    sessionState.agentId = created.agentId;
+    sessionState.agentToken = created.agentToken;
+    sessionState.pairingId = null;
+    sessionState.scope = created.scope;
+    sessionState.credential = nearlyExpired.credential;
+    sessionState.holderPrivateKey = holder.privateKeyPem;
+    sessionState.principalId = created.principalId;
+
+    const resolved = await auth();
+    if (typeof resolved === "string" || resolved.kind !== "v3") throw new Error("expected v3 auth");
+    expect(resolved.credential).not.toBe(nearlyExpired.credential);
+    expect(sessionState.credential).toBe(resolved.credential);
+
+    // The renewed credential actually works against the relay, and still
+    // carries the same scope — this isn't a widened credential in disguise.
+    const mine = await client.getMine(resolved);
+    expect(mine.pairing).toBeNull(); // no peer joined this pairing in this test
+  });
+
+  it("leaves a fresh credential untouched — no renewal churn on every call", async () => {
+    const { generateHolderKeyPair } = await import("inzo-holder");
+    const { auth, sessionState } = await import("../src/tools.js");
+
+    const holder = generateHolderKeyPair();
+    const created = await client.createPairing({ jwk: holder.publicJwk });
+    if (!created.credential) throw new Error("expected a v3 credential from a cnf-bearing pairing");
+
+    sessionState.agentId = created.agentId;
+    sessionState.agentToken = created.agentToken;
+    sessionState.pairingId = null;
+    sessionState.scope = created.scope;
+    sessionState.credential = created.credential;
+    sessionState.holderPrivateKey = holder.privateKeyPem;
+    sessionState.principalId = created.principalId;
+
+    const resolved = await auth();
+    if (typeof resolved === "string" || resolved.kind !== "v3") throw new Error("expected v3 auth");
+    expect(resolved.credential).toBe(created.credential);
+  });
+});
