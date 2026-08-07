@@ -22,6 +22,7 @@ export const AUDIT_ACTIONS = [
   "credential.attenuated",
   "credential.revoked",
   "plan.proposed",
+  "plan.item_status_changed",
   "consent.approved",
   "consent.withdrawn",
   "consent.satisfied",

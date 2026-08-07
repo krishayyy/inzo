@@ -43,7 +43,7 @@ import {
   type CredentialPayload,
 } from "./lib.js";
 import { rpcSafe, type RpcResult } from "./rpcError.js";
-import type { Budget, CombinedUsage, Message, Pairing, Plan, PlanItem, UsageReport, UsageSnapshot } from "./types.js";
+import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, UsageReport, UsageSnapshot } from "./types.js";
 
 function normalizeDeadline(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -87,6 +87,21 @@ CREATE TABLE IF NOT EXISTS plans (
   version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+-- Live per-item progress, deliberately separate from \`plans\`: this is
+-- mutable operational state, never part of what a signed consent approval
+-- covers (see PlanWithStatus in types.ts). Keyed by the plan's own version
+-- so a re-proposed plan's stale indices from a prior version are never read
+-- as if they applied to the new one.
+CREATE TABLE IF NOT EXISTS plan_item_status (
+  pairing_id TEXT NOT NULL,
+  plan_version INTEGER NOT NULL,
+  item_index INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (pairing_id, plan_version, item_index)
 );
 
 CREATE TABLE IF NOT EXISTS budgets (
@@ -156,7 +171,7 @@ interface PlanRow {
 export interface Digest {
   pairingId: string;
   generatedAt: string;
-  plan: Plan | null;
+  plan: PlanWithStatus | null;
   consent: ConsentRecord | null;
   usage: UsageSnapshot;
   recentMessages: Message[];
@@ -380,9 +395,25 @@ export class PairingRoom extends DurableObject<Env> {
     };
   }
 
-  getPlan(): Plan | null {
+  private getItemStatusMap(pairingId: string, planVersion: number): Map<number, ItemStatus> {
+    const rows = [
+      ...this.ctx.storage.sql.exec(
+        `SELECT item_index, status FROM plan_item_status WHERE pairing_id = ? AND plan_version = ?`,
+        pairingId,
+        planVersion,
+      ),
+    ] as Array<{ item_index: number; status: ItemStatus }>;
+    return new Map(rows.map((row) => [row.item_index, row.status]));
+  }
+
+  private withStatus(plan: Plan): PlanWithStatus {
+    const statuses = this.getItemStatusMap(plan.pairingId, plan.version);
+    return { ...plan, items: plan.items.map((item, index) => ({ ...item, status: statuses.get(index) ?? "pending" })) };
+  }
+
+  getPlan(): PlanWithStatus | null {
     const row = this.getPlanRow();
-    return row ? this.rowToPlan(row) : null;
+    return row ? this.withStatus(this.rowToPlan(row)) : null;
   }
 
   private getConsentOrThrow(): ConsentRecord | null {
@@ -436,11 +467,29 @@ export class PairingRoom extends DurableObject<Env> {
     return rpcSafe(() => {
       if (typeof goal !== "string" || !goal.trim()) throw badRequest("goal is required");
       if (!Array.isArray(items) || items.length === 0) throw badRequest("items must be a non-empty array of { owner, task }");
-      for (const item of items) {
-        if (!item?.owner?.trim() || !item?.task?.trim()) throw badRequest("each plan item requires an owner and a task");
-      }
       const pairing = this.getPairingOrThrow();
       this.assertMemberOrThrow(pairing, proposedBy);
+
+      items.forEach((item, index) => {
+        if (!item?.owner?.trim() || !item?.task?.trim()) throw badRequest("each plan item requires an owner and a task");
+        // The owner must be an actual participant of this pairing, not free
+        // text — otherwise "don't touch an item you don't own" has nothing
+        // real to check a caller's identity against.
+        if (item.owner !== pairing.agentA && item.owner !== pairing.agentB) {
+          throw badRequest(`Item ${index}'s owner "${item.owner}" is not a participant of this pairing`);
+        }
+        if (item.dependsOn !== undefined) {
+          if (!Array.isArray(item.dependsOn)) throw badRequest(`Item ${index}'s dependsOn must be an array of item indices`);
+          for (const dep of item.dependsOn) {
+            // Only earlier indices are allowed — that alone makes a
+            // dependency cycle syntactically unrepresentable, no graph
+            // traversal needed to reject one.
+            if (!Number.isInteger(dep) || dep < 0 || dep >= index) {
+              throw badRequest(`Item ${index}'s dependsOn must reference earlier items only (got ${dep})`);
+            }
+          }
+        }
+      });
 
       const now = new Date().toISOString();
       const existing = this.getPlanRow();
@@ -464,6 +513,10 @@ export class PairingRoom extends DurableObject<Env> {
         createdAt,
         now,
       );
+
+      // Any status recorded against a prior version's item indices no longer
+      // means anything once the items array has been replaced.
+      this.ctx.storage.sql.exec(`DELETE FROM plan_item_status WHERE pairing_id = ? AND plan_version != ?`, pairingId, version);
 
       const uniquePrincipals = [...new Set(principals.filter(Boolean))];
       if (uniquePrincipals.length === 2) {
@@ -546,6 +599,63 @@ export class PairingRoom extends DurableObject<Env> {
 
       this.broadcast("plan.updated", { plan });
       return consentRecord ? { ...plan, consent: consentRecord } : plan;
+    });
+  }
+
+  /**
+   * Marks one item's live progress. Deliberately does not touch `plans` or
+   * `consent_records` — see the `plan_item_status` schema comment. Gated on
+   * the plan being locked (both sides have agreed) so "start work" always
+   * means work against an actually-agreed goal, never a draft still being
+   * negotiated.
+   */
+  updateItemStatus(agentId: string, itemIndex: number, status: ItemStatus, actor: AuditActor, assurance: Assurance): RpcResult<PlanWithStatus> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, agentId);
+      if (!["pending", "in_progress", "done"].includes(status)) {
+        throw badRequest(`status must be one of pending, in_progress, done (got "${status}")`);
+      }
+
+      const row = this.getPlanRow();
+      if (!row) throw notFound(`No plan has been proposed for pairing "${pairing.id}"`);
+      const plan = this.rowToPlan(row);
+      if (!plan.locked) throw badRequest("The plan must be approved by both sides before item progress can be tracked");
+      if (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= plan.items.length) {
+        throw badRequest(`itemIndex must be between 0 and ${plan.items.length - 1}`);
+      }
+
+      const item = plan.items[itemIndex]!;
+      if (item.owner !== agentId) {
+        throw forbidden(`Item ${itemIndex} ("${item.task}") belongs to ${item.owner}, not ${agentId} — an agent may only update its own items`);
+      }
+
+      const statuses = this.getItemStatusMap(plan.pairingId, plan.version);
+      if (status !== "pending" && item.dependsOn?.length) {
+        const unfinished = item.dependsOn.filter((dep) => (statuses.get(dep) ?? "pending") !== "done");
+        if (unfinished.length > 0) {
+          throw badRequest(`Item ${itemIndex} depends on item(s) ${unfinished.join(", ")}, which are not done yet`);
+        }
+      }
+
+      const now = new Date().toISOString();
+      this.ctx.storage.sql.exec(
+        `INSERT INTO plan_item_status (pairing_id, plan_version, item_index, status, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(pairing_id, plan_version, item_index) DO UPDATE SET
+           status = excluded.status, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+        plan.pairingId,
+        plan.version,
+        itemIndex,
+        status,
+        agentId,
+        now,
+      );
+
+      this.appendAudit("plan.item_status_changed", actor, assurance, { version: plan.version, itemIndex, task: item.task, status });
+      const updated = this.withStatus(plan);
+      this.broadcast("plan.item_status_changed", { plan: updated, itemIndex, status });
+      return updated;
     });
   }
 

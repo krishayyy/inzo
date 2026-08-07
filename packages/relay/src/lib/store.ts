@@ -224,6 +224,7 @@ export class RelayStore {
    * prove possession and is therefore barred from giving consent.
    */
   createPairingCode(cnf?: { jwk: Jwk }): PairingCode & {
+    agentId: string;
     agentToken: string;
     scope: Scope[];
     pairingId: null;
@@ -268,6 +269,7 @@ export class RelayStore {
 
         return {
           ...this.rowToPairingCode(this.getPairingCodeRow(code)!),
+          agentId: creatorAgentId,
           agentToken,
           scope,
           pairingId: null,

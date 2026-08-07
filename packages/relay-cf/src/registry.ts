@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
 
 export interface CreatedPairingCode {
   code: string;
+  agentId: string;
   agentToken: string;
   scope: Scope[];
   pairingId: null;
@@ -431,7 +432,7 @@ export class Registry extends DurableObject<Env> {
         credential = this.issueRoot({ agentId: creatorAgentId, principalId, pairingId: null, cap: scope, cnf }).credential;
       }
 
-      return { code, agentToken, scope, pairingId: null, principalId, credential, expiresAt: expiresAt.toISOString() };
+      return { code, agentId: creatorAgentId, agentToken, scope, pairingId: null, principalId, credential, expiresAt: expiresAt.toISOString() };
     }
     throw new Error("Failed to generate a unique pairing code");
   }

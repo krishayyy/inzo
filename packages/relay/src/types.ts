@@ -57,7 +57,16 @@ export interface Message {
 export interface PlanItem {
   owner: string;
   task: string;
+  /**
+   * Indices into this same `items` array that must be `done` before this
+   * item may move past `pending`. Each entry must be a lower index than the
+   * item's own position — that alone makes a dependency cycle syntactically
+   * impossible, no graph traversal required to reject one.
+   */
+  dependsOn?: number[];
 }
+
+export type ItemStatus = "pending" | "in_progress" | "done";
 
 export interface Plan {
   pairingId: string;
@@ -74,6 +83,14 @@ export interface Plan {
   version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** `Plan`, plus each item's live progress. Progress is intentionally not
+ *  part of `Plan` itself: it is never part of the signed consent subject
+ *  (`planSubjectHash`), so marking an item done can never invalidate an
+ *  already-signed approval the way editing the goal or items would. */
+export interface PlanWithStatus extends Omit<Plan, "items"> {
+  items: (PlanItem & { status: ItemStatus })[];
 }
 
 /** The shared budget both agents plan against. Any field may be unset. */

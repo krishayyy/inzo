@@ -160,12 +160,17 @@ export interface Message {
 export interface PlanItem {
   owner: string;
   task: string;
+  /** Indices of earlier items in the same list that must be "done" first. */
+  dependsOn?: number[];
 }
+
+export type ItemStatus = "pending" | "in_progress" | "done";
 
 export interface Plan {
   pairingId: string;
   goal: string;
-  items: PlanItem[];
+  /** Every item the server returns carries live status — see update_item_status. */
+  items: (PlanItem & { status: ItemStatus })[];
   proposedBy: string;
   approvedBy: string[];
   locked: boolean;
@@ -317,6 +322,11 @@ export const relayClient = {
 
   proposePlan(pairingId: string, auth: Auth | string, goal: string, items: PlanItem[]): Promise<{ plan: Plan }> {
     return request("POST", `/pairings/${encodeURIComponent(pairingId)}/plan`, { goal, items }, undefined, auth);
+  },
+
+  /** Only the item's owner may call this, and only once the plan is locked — enforced server-side. */
+  updateItemStatus(pairingId: string, auth: Auth | string, itemIndex: number, status: ItemStatus): Promise<{ plan: Plan }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/plan/items/${itemIndex}/status`, { status }, undefined, auth);
   },
 
   /** `signature` turns the approval into evidence rather than an assertion. */

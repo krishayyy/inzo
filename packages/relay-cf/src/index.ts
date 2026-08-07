@@ -468,6 +468,16 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json(consentRecord ? { plan, consent: consentRecord } : { plan });
   }
 
+  const itemStatusMatch = sub.match(/^plan\/items\/(\d+)\/status$/);
+  if (itemStatusMatch && req.method === "POST") {
+    requireScope(auth, "plan:propose");
+    const { status } = (rawBody ?? {}) as { status?: string };
+    const updated = unwrap(
+      await room.updateItemStatus(auth.agentId, Number(itemStatusMatch[1]), (status ?? "") as never, actorFrom(auth), assuranceFrom(auth)),
+    );
+    return json({ plan: updated });
+  }
+
   if (sub === "consent" && req.method === "GET") {
     return json({ consent: await room.getConsent() });
   }

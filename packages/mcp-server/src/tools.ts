@@ -252,14 +252,25 @@ export function registerTools(server: McpServer): void {
     {
       title: "Propose plan",
       description:
-        "Propose a shared goal and task split. Both humans must approve the same version via approve_plan before the plan locks. Re-proposing resets all approvals and bumps the version.",
+        "Propose a shared goal and task split. Both humans must approve the same version via approve_plan before the plan locks. Re-proposing resets all approvals, bumps the version, and clears any in-progress/done status from the old items. Once locked, ownership is enforced server-side — an agent can only update the status of items it owns (see update_item_status).",
       inputSchema: {
         goal: z.string().min(1).describe("The shared goal both agents/humans are working toward"),
         tasks: z
           .array(
             z.object({
-              owner: z.string().min(1).describe("Who owns this task, e.g. an agentId or human name"),
+              owner: z
+                .string()
+                .min(1)
+                .describe(
+                  "Must be one of this pairing's two real agentIds (your own, from sessionState/get_pairing_status, or the peer's) — not a human name or free text. The relay rejects anything else.",
+                ),
               task: z.string().min(1).describe("Description of the task"),
+              dependsOn: z
+                .array(z.number().int().min(0))
+                .optional()
+                .describe(
+                  "Indices of other items in this same list that must reach 'done' before this one can leave 'pending'. Each index must be earlier in the list than this item's own position.",
+                ),
             }),
           )
           .min(1)
@@ -332,6 +343,27 @@ export function registerTools(server: McpServer): void {
       try {
         const { plan } = await relayClient.getPlan(requirePairingId(), await auth());
         return textResult(plan ?? { message: "No plan has been proposed yet." });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "update_item_status",
+    {
+      title: "Update plan item status",
+      description:
+        "Mark progress on one item of the locked plan — pending, in_progress, or done. Only the item's own owner may update it (the relay enforces this, not this tool), and the plan must already be locked (both sides approved). If the item has dependsOn entries, it can't move past pending until those items are done. This never changes the plan's version or touches consent — marking work done is not the same as re-approving the goal.",
+      inputSchema: {
+        itemIndex: z.number().int().min(0).describe("The index of the item in the plan's items array"),
+        status: z.enum(["pending", "in_progress", "done"]).describe("The new status for this item"),
+      },
+    },
+    async ({ itemIndex, status }) => {
+      try {
+        const { plan } = await relayClient.updateItemStatus(requirePairingId(), await auth(), itemIndex, status);
+        return textResult(plan);
       } catch (err) {
         return errorResult(err);
       }

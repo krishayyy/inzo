@@ -35,8 +35,8 @@ async function pairV2() {
   const joined = await post(`/pairings/${created.body.code}/join`);
   return {
     pairingId: joined.body.pairingId as string,
-    a: { auth: { Authorization: `Bearer ${created.body.agentToken}` } },
-    b: { auth: { Authorization: `Bearer ${joined.body.agentToken}` } },
+    a: { agentId: created.body.agentId as string, auth: { Authorization: `Bearer ${created.body.agentToken}` } },
+    b: { agentId: joined.body.agentB as string, auth: { Authorization: `Bearer ${joined.body.agentToken}` } },
   };
 }
 
@@ -60,8 +60,8 @@ async function pairV3() {
   const joined = await post(`/pairings/${created.body.code}/join`, { cnf: { jwk: holderB.publicJwk } });
   return {
     pairingId: joined.body.pairingId as string,
-    a: { credential: created.body.credential as string, privateKeyPem: holderA.privateKeyPem },
-    b: { credential: joined.body.credential as string, privateKeyPem: holderB.privateKeyPem },
+    a: { agentId: created.body.agentId as string, credential: created.body.credential as string, privateKeyPem: holderA.privateKeyPem },
+    b: { agentId: joined.body.agentB as string, credential: joined.body.credential as string, privateKeyPem: holderB.privateKeyPem },
   };
 }
 
@@ -167,7 +167,7 @@ describe("digest", () => {
 describe("plans (v2 bearer — no signed consent)", () => {
   it("proposes a plan and reflects it via GET", async () => {
     const { pairingId, a } = await pairV2();
-    const proposed = await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+    const proposed = await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
     expect(proposed.status).toBe(201);
     expect(proposed.body.plan.version).toBe(1);
 
@@ -177,7 +177,7 @@ describe("plans (v2 bearer — no signed consent)", () => {
 
   it("locks once both agents approve the same version", async () => {
     const { pairingId, a, b } = await pairV2();
-    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
 
     const first = await post(`/pairings/${pairingId}/plan/approve`, { planVersion: 1 }, a.auth);
     expect(first.body.plan.locked).toBe(false);
@@ -188,8 +188,8 @@ describe("plans (v2 bearer — no signed consent)", () => {
 
   it("rejects approving a stale version after a re-proposal", async () => {
     const { pairingId, a } = await pairV2();
-    await post(`/pairings/${pairingId}/plan`, { goal: "v1", items: [{ owner: "a", task: "build" }] }, a.auth);
-    await post(`/pairings/${pairingId}/plan`, { goal: "v2", items: [{ owner: "a", task: "build" }] }, a.auth);
+    await post(`/pairings/${pairingId}/plan`, { goal: "v1", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    await post(`/pairings/${pairingId}/plan`, { goal: "v2", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
     const res = await post(`/pairings/${pairingId}/plan/approve`, { planVersion: 1 }, a.auth);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("stale_plan");
@@ -303,7 +303,7 @@ describe("audit log", () => {
   it("chainValid stays true as more records are appended, and each hash links to the previous", async () => {
     const { pairingId, a } = await pairV2();
     await post(`/pairings/${pairingId}/messages`, { body: "hi" }, a.auth); // messages are not audited, should not appear
-    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
 
     const res = await get(`/pairings/${pairingId}/audit`, a.auth);
     expect(res.body.chainValid).toBe(true);
@@ -318,7 +318,7 @@ describe("audit log", () => {
 
   it("supports paging with `since` while still verifying the full chain", async () => {
     const { pairingId, a } = await pairV2();
-    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
 
     const full = await get(`/pairings/${pairingId}/audit`, a.auth);
     expect(full.body.records).toHaveLength(3);
@@ -558,7 +558,7 @@ describe("SSE stream", () => {
     const stream = eventReader(res);
     await stream.next(1); // ready
 
-    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "a", task: "build" }] }, a.auth);
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
 
     const [planEvent] = await stream.next(1);
     expect(planEvent.event).toBe("plan.updated");
@@ -655,7 +655,7 @@ describe("POST /consent/verify", () => {
   it("independently confirms a satisfied consent record using known holder keys", async () => {
     const { pairingId, a, b } = await pairV3();
     const proposePath = `/pairings/${pairingId}/plan`;
-    const proposeBody = { goal: "ship it", items: [{ owner: "a", task: "build" }] };
+    const proposeBody = { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] };
     await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
 
     const consentPath = `/pairings/${pairingId}/consent`;
@@ -685,7 +685,7 @@ describe("POST /consent/verify", () => {
   it("reports invalid when the signature doesn't match the supplied holder key", async () => {
     const { pairingId, a } = await pairV3();
     const proposePath = `/pairings/${pairingId}/plan`;
-    const proposeBody = { goal: "ship it", items: [{ owner: "a", task: "build" }] };
+    const proposeBody = { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] };
     await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
     const consentPath = `/pairings/${pairingId}/consent`;
     const consent = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
@@ -730,7 +730,7 @@ describe("stale plan integrity check", () => {
     // plan's stored content directly, the same way a bad migration would.
     const { pairingId, a } = await pairV3();
     const proposePath = `/pairings/${pairingId}/plan`;
-    const proposeBody = { goal: "ship it", items: [{ owner: "a", task: "build" }] };
+    const proposeBody = { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] };
     const proposed = await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
     expect(proposed.status).toBe(201);
 
@@ -752,5 +752,156 @@ describe("stale plan integrity check", () => {
     const res = await post(approvePath, approveBody, v3Headers(a.credential, a.privateKeyPem, "POST", approvePath, approveBody));
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("stale_plan");
+  });
+});
+
+/** Approves a v2-bearer plan from both sides so it locks, with no signature machinery needed. */
+async function lockPlan(pairingId: string, a: { auth: Record<string, string> }, b: { auth: Record<string, string> }): Promise<number> {
+  const plan = await get(`/pairings/${pairingId}/plan`, a.auth);
+  const version = plan.body.plan.version as number;
+  await post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, a.auth);
+  const second = await post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, b.auth);
+  expect(second.body.plan.locked).toBe(true);
+  return version;
+}
+
+describe("plan item ownership + dependencies (§ shared-goal tracking)", () => {
+  it("rejects an item whose owner isn't an actual participant of the pairing", async () => {
+    const { pairingId, a } = await pairV2();
+    const res = await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: "not-a-real-agent", task: "build" }] }, a.auth);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a dependsOn index that isn't strictly earlier than the item itself", async () => {
+    const { pairingId, a } = await pairV2();
+    const forward = await post(
+      `/pairings/${pairingId}/plan`,
+      { goal: "ship it", items: [{ owner: a.agentId, task: "one", dependsOn: [0] }] }, // depends on itself
+      a.auth,
+    );
+    expect(forward.status).toBe(400);
+
+    const outOfRange = await post(
+      `/pairings/${pairingId}/plan`,
+      { goal: "ship it", items: [{ owner: a.agentId, task: "one" }, { owner: a.agentId, task: "two", dependsOn: [5] }] },
+      a.auth,
+    );
+    expect(outOfRange.status).toBe(400);
+  });
+
+  it("accepts a valid dependsOn chain and reflects it back on GET", async () => {
+    const { pairingId, a, b } = await pairV2();
+    const res = await post(
+      `/pairings/${pairingId}/plan`,
+      { goal: "ship it", items: [{ owner: a.agentId, task: "backend" }, { owner: b.agentId, task: "frontend", dependsOn: [0] }] },
+      a.auth,
+    );
+    expect(res.status).toBe(201);
+    const fetched = await get(`/pairings/${pairingId}/plan`, a.auth);
+    expect(fetched.body.plan.items[1].dependsOn).toEqual([0]);
+  });
+
+  it("every item defaults to pending status once proposed", async () => {
+    const { pairingId, a } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    const fetched = await get(`/pairings/${pairingId}/plan`, a.auth);
+    expect(fetched.body.plan.items[0].status).toBe("pending");
+  });
+
+  it("rejects updating item status before the plan is locked", async () => {
+    const { pairingId, a } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    const res = await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "in_progress" }, a.auth);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an agent updating an item it doesn't own", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    await lockPlan(pairingId, a, b);
+    const res = await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "in_progress" }, b.auth);
+    expect(res.status).toBe(403);
+  });
+
+  it("lets the owner move its own item through pending -> in_progress -> done", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    await lockPlan(pairingId, a, b);
+
+    const inProgress = await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "in_progress" }, a.auth);
+    expect(inProgress.status).toBe(200);
+    expect(inProgress.body.plan.items[0].status).toBe("in_progress");
+
+    const done = await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "done" }, a.auth);
+    expect(done.body.plan.items[0].status).toBe("done");
+  });
+
+  it("blocks starting a dependent item until its dependency is done", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(
+      `/pairings/${pairingId}/plan`,
+      { goal: "ship it", items: [{ owner: a.agentId, task: "backend" }, { owner: b.agentId, task: "frontend", dependsOn: [0] }] },
+      a.auth,
+    );
+    await lockPlan(pairingId, a, b);
+
+    const tooEarly = await post(`/pairings/${pairingId}/plan/items/1/status`, { status: "in_progress" }, b.auth);
+    expect(tooEarly.status).toBe(400);
+
+    await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "done" }, a.auth);
+    const nowOk = await post(`/pairings/${pairingId}/plan/items/1/status`, { status: "in_progress" }, b.auth);
+    expect(nowOk.status).toBe(200);
+  });
+
+  it("marking an item done never touches plan.version and never invalidates an already-signed consent", async () => {
+    const { pairingId, a, b } = await pairV3();
+    const proposePath = `/pairings/${pairingId}/plan`;
+    const proposeBody = { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] };
+    await post(proposePath, proposeBody, v3Headers(a.credential, a.privateKeyPem, "POST", proposePath, proposeBody));
+
+    const consentPath = `/pairings/${pairingId}/consent`;
+    const before = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+    const subject = before.body.consent.subject;
+
+    const approvePath = `/pairings/${pairingId}/plan/approve`;
+    const approveA = { planVersion: 1, signature: signApproval(a.privateKeyPem, pairingId, subject) };
+    await post(approvePath, approveA, v3Headers(a.credential, a.privateKeyPem, "POST", approvePath, approveA));
+    const approveB = { planVersion: 1, signature: signApproval(b.privateKeyPem, pairingId, subject) };
+    await post(approvePath, approveB, v3Headers(b.credential, b.privateKeyPem, "POST", approvePath, approveB));
+
+    const beforeStatusChange = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+    expect(beforeStatusChange.body.consent.satisfied).toBe(true);
+
+    const statusPath = `/pairings/${pairingId}/plan/items/0/status`;
+    const statusBody = { status: "done" };
+    const statusRes = await post(statusPath, statusBody, v3Headers(a.credential, a.privateKeyPem, "POST", statusPath, statusBody));
+    expect(statusRes.status).toBe(200);
+    expect(statusRes.body.plan.version).toBe(1); // unchanged
+
+    const afterStatusChange = await get(consentPath, v3Headers(a.credential, a.privateKeyPem, "GET", consentPath));
+    expect(afterStatusChange.body.consent).toEqual(beforeStatusChange.body.consent); // byte-identical, untouched
+  });
+
+  it("clears stale status when the plan is re-proposed with a new version", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "v1", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    await lockPlan(pairingId, a, b);
+    await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "done" }, a.auth);
+
+    // Re-propose replaces the items array entirely — item 0's identity is new.
+    await post(`/pairings/${pairingId}/plan`, { goal: "v2", items: [{ owner: a.agentId, task: "build, take two" }] }, a.auth);
+    const fetched = await get(`/pairings/${pairingId}/plan`, a.auth);
+    expect(fetched.body.plan.items[0].status).toBe("pending");
+  });
+
+  it("records a plan.item_status_changed audit entry", async () => {
+    const { pairingId, a, b } = await pairV2();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+    await lockPlan(pairingId, a, b);
+    await post(`/pairings/${pairingId}/plan/items/0/status`, { status: "done" }, a.auth);
+
+    const audit = await get(`/pairings/${pairingId}/audit`, a.auth);
+    const entry = audit.body.records.find((r: { action: string }) => r.action === "plan.item_status_changed");
+    expect(entry).toBeDefined();
   });
 });
