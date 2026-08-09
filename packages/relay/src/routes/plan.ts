@@ -9,10 +9,14 @@ export function planRouter(store: RelayStore): Router {
 
   // POST /pairings/:id/plan — propose (or re-propose) a shared goal + task
   // split. Re-proposing resets both approvals and bumps `version`.
-  const propose: RequestHandler<PairingParams> = (req, res) => {
-    const { goal, items } = req.body ?? {};
-    const plan = store.proposePlan(req.params.id, req.inzoAuth!.agentId, goal, items);
-    res.status(201).json({ plan });
+  const propose: RequestHandler<PairingParams> = async (req, res, next) => {
+    try {
+      const { goal, items } = req.body ?? {};
+      const plan = await store.proposePlan(req.params.id, req.inzoAuth!.agentId, goal, items);
+      res.status(201).json({ plan });
+    } catch (err) {
+      next(err);
+    }
   };
 
   // POST /pairings/:id/plan/approve — record one human's approval of the exact
@@ -20,16 +24,20 @@ export function planRouter(store: RelayStore): Router {
   // A v3 caller additionally sends `signature` — their holder key over a hash
   // of the exact plan text. That turns the approval from a row we assert into
   // evidence anyone can check without trusting us (§6.2).
-  const approve: RequestHandler<PairingParams> = (req, res) => {
-    const { planVersion, signature } = req.body ?? {};
-    const auth = req.inzoAuth!;
-    const consent =
-      signature !== undefined && auth.credential
-        ? { payload: auth.credential, assurance: auth.assurance, signature }
-        : undefined;
-    const result = store.approvePlan(req.params.id, auth.agentId, planVersion, consent);
-    const { consent: consentRecord, ...plan } = result as typeof result & { consent?: unknown };
-    res.json(consentRecord ? { plan, consent: consentRecord } : { plan });
+  const approve: RequestHandler<PairingParams> = async (req, res, next) => {
+    try {
+      const { planVersion, signature } = req.body ?? {};
+      const auth = req.inzoAuth!;
+      const consent =
+        signature !== undefined && auth.credential
+          ? { payload: auth.credential, assurance: auth.assurance, signature }
+          : undefined;
+      const result = await store.approvePlan(req.params.id, auth.agentId, planVersion, consent);
+      const { consent: consentRecord, ...plan } = result as typeof result & { consent?: unknown };
+      res.json(consentRecord ? { plan, consent: consentRecord } : { plan });
+    } catch (err) {
+      next(err);
+    }
   };
 
   // GET /pairings/:id/plan — current plan + approval status.

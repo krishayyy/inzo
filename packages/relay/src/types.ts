@@ -83,6 +83,13 @@ export interface Plan {
   version: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The AgentRun sandbox embodying this plan's pending-approval wait
+   * (§ packages/relay/src/lib/agentrun.ts). `null` until AgentRun has been
+   * contacted; `sandboxState` tracks stopped -> disposed as approvals land.
+   */
+  sandboxId: string | null;
+  sandboxState: "stopped" | "disposed" | "simulated" | null;
 }
 
 /** `Plan`, plus each item's live progress. Progress is intentionally not

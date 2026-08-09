@@ -24,6 +24,33 @@ Config is via environment variables:
 No external services required — this is a single Node process with an
 embedded SQLite database (via `better-sqlite3`), so it's easy to self-host.
 
+### Optional: Alibaba Cloud AgentRun sandbox for plan waits
+
+A proposed plan sits unlocked until both paired humans approve it — a real
+execute-wait-execute gap (see `src/lib/agentrun.ts`). When these variables are
+set, that wait is embodied as a real AgentRun sandbox (stopped while pending,
+disposed once both approvals land) instead of the relay just holding a row:
+
+| Var                          | Meaning                                                      |
+| ----------------------------- | ------------------------------------------------------------ |
+| `AGENTRUN_ACCESS_KEY_ID`      | Alibaba Cloud access key id                                  |
+| `AGENTRUN_ACCESS_KEY_SECRET`  | Alibaba Cloud access key secret                               |
+| `AGENTRUN_ACCOUNT_ID`         | Alibaba Cloud account id                                      |
+| `AGENTRUN_REGION`             | Defaults to `cn-hangzhou`                                     |
+| `AGENTRUN_TEMPLATE_NAME`      | Name of a Code Interpreter sandbox template created once in the AgentRun console (required — there is no default/shared template) |
+
+Without all four required variables set, plan proposal/approval falls back to
+a clearly-labeled simulated wait (`sandboxState: "simulated"`) so the relay
+runs the same either way. The plan object returned by `GET /pairings/:id/plan`
+and pushed over the `plan.updated` SSE event carries `sandboxId` and
+`sandboxState` (`"stopped" | "disposed" | "simulated"`) so `inzo watch` can
+show the sandbox lifecycle live.
+
+Note: the installed `@agentrun/sdk@0.0.5` has no pause/hibernate/resume
+method — this uses stop + recreate, which is the verified, honest equivalent
+(real compute torn down while waiting, not left running and polling), not the
+platform's native hibernate/wake.
+
 ## Concepts
 
 - **Pairing code**: a short-lived (~15 min), single-use code like

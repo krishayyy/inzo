@@ -7,6 +7,7 @@ import { computeRunway, foldUsage } from "./runway.js";
 import { narrowedScope, parseScope, serializeScope } from "./scopes.js";
 import { CredentialStore } from "./credentialStore.js";
 import { planSubjectHash, type ConsentRecord } from "./consent.js";
+import { beginPlanWait, type WaitHandle } from "./agentrun.js";
 import type { Jwk } from "./credential.js";
 import type { Assurance } from "./audit.js";
 import {
@@ -73,7 +74,9 @@ CREATE TABLE IF NOT EXISTS plans (
   locked INTEGER NOT NULL DEFAULT 0,
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  sandbox_id TEXT,
+  sandbox_state TEXT
 );
 
 CREATE TABLE IF NOT EXISTS budgets (
@@ -102,6 +105,8 @@ const LATE_COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "agent_tokens", column: "scope", ddl: `TEXT NOT NULL DEFAULT '${serializeScope([...ALL_SCOPES])}'` },
   { table: "agent_tokens", column: "revoked_at", ddl: "TEXT" },
   { table: "plans", column: "version", ddl: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "plans", column: "sandbox_id", ddl: "TEXT" },
+  { table: "plans", column: "sandbox_state", ddl: "TEXT" },
 ];
 
 interface PairingCodeRow {
@@ -139,6 +144,8 @@ interface PlanRow {
   version: number;
   created_at: string;
   updated_at: string;
+  sandbox_id: string | null;
+  sandbox_state: string | null;
 }
 
 interface BudgetRow {
@@ -189,6 +196,11 @@ export class RelayStore {
    *  separate object — this store owns the conversation, that one owns
    *  authority, and they have different reasons to change. */
   readonly credentials: CredentialStore;
+  /** AgentRun sandbox handles for pending plans, keyed by pairing. Not
+   *  persisted — the DB columns (sandbox_id/sandbox_state) are the durable,
+   *  display-facing record; this map is what lets approvePlan call dispose()
+   *  on the exact handle proposePlan opened, within one process lifetime. */
+  private readonly planWaits = new Map<string, WaitHandle>();
 
   constructor(dbPath = ":memory:", issuerUrl = process.env.INZO_ISSUER_URL ?? "http://localhost:8787") {
     this.db = new Database(dbPath);
@@ -552,7 +564,7 @@ export class RelayStore {
   // Plans
   // ---------------------------------------------------------------------
 
-  proposePlan(pairingId: string, proposedBy: string, goal: string, items: PlanItem[]): Plan {
+  async proposePlan(pairingId: string, proposedBy: string, goal: string, items: PlanItem[]): Promise<Plan> {
     if (typeof goal !== "string" || !goal.trim()) {
       throw badRequest("goal is required");
     }
@@ -572,6 +584,24 @@ export class RelayStore {
     const createdAt = existing?.created_at ?? now;
     const version = (existing?.version ?? 0) + 1;
 
+    // A re-proposal supersedes whatever wait the previous version opened —
+    // that sandbox no longer represents anything real, so tear it down rather
+    // than leaking it.
+    const priorWait = this.planWaits.get(pairingId);
+    if (priorWait) {
+      this.planWaits.delete(pairingId);
+      await priorWait.dispose();
+    }
+
+    // The gap between proposing and both humans approving is a genuine
+    // execute-wait-execute moment — nothing useful runs until it closes. That
+    // wait is embodied as a real AgentRun sandbox, stopped immediately since
+    // the point is representing "blocked," not running anything.
+    const wait = await beginPlanWait(pairingId);
+    await wait.suspend();
+    this.planWaits.set(pairingId, wait);
+    const sandboxState = wait.simulated ? "simulated" : "stopped";
+
     // A fresh proposal resets approvals and unlocks — renegotiating must never
     // inherit stale consent. The version bump is what lets an in-flight
     // approval for the previous text be rejected rather than silently applied.
@@ -585,12 +615,14 @@ export class RelayStore {
       version,
       createdAt,
       updatedAt: now,
+      sandboxId: wait.sandboxId,
+      sandboxState,
     };
 
     this.db
       .prepare(
-        `INSERT INTO plans (pairing_id, goal, items, proposed_by, approved_by, locked, version, created_at, updated_at)
-         VALUES (@pairingId, @goal, @items, @proposedBy, @approvedBy, 0, @version, @createdAt, @updatedAt)
+        `INSERT INTO plans (pairing_id, goal, items, proposed_by, approved_by, locked, version, created_at, updated_at, sandbox_id, sandbox_state)
+         VALUES (@pairingId, @goal, @items, @proposedBy, @approvedBy, 0, @version, @createdAt, @updatedAt, @sandboxId, @sandboxState)
          ON CONFLICT(pairing_id) DO UPDATE SET
            goal = excluded.goal,
            items = excluded.items,
@@ -598,7 +630,9 @@ export class RelayStore {
            approved_by = excluded.approved_by,
            locked = 0,
            version = excluded.version,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           sandbox_id = excluded.sandbox_id,
+           sandbox_state = excluded.sandbox_state`,
       )
       .run({
         pairingId,
@@ -609,6 +643,8 @@ export class RelayStore {
         version,
         createdAt,
         updatedAt: now,
+        sandboxId: wait.sandboxId,
+        sandboxState,
       });
 
     // A fresh proposal opens a fresh consent record, destroying any prior
@@ -640,12 +676,12 @@ export class RelayStore {
    * lands and attaches to text the human never read. Failing with 409 forces
    * a look at what actually changed.
    */
-  approvePlan(
+  async approvePlan(
     pairingId: string,
     agentId: string,
     planVersion: unknown,
     consent?: { payload: import("./credential.js").CredentialPayload; assurance: Assurance; signature: unknown },
-  ): Plan & { consent?: ConsentRecord } {
+  ): Promise<Plan & { consent?: ConsentRecord }> {
     const pairing = this.getPairing(pairingId);
     this.assertMember(pairing, agentId);
 
@@ -665,12 +701,25 @@ export class RelayStore {
     const locked = approvedBy.has(pairing.agentA) && approvedBy.has(pairing.agentB);
     const updatedAt = new Date().toISOString();
 
+    // Both approvals landed — the wait this plan opened has resolved. Tear
+    // the sandbox down for good rather than leaving it stopped indefinitely.
+    let sandboxState = row.sandbox_state;
+    if (locked) {
+      const wait = this.planWaits.get(pairingId);
+      if (wait) {
+        this.planWaits.delete(pairingId);
+        await wait.dispose();
+        sandboxState = wait.simulated ? "simulated" : "disposed";
+      }
+    }
+
     this.db
-      .prepare(`UPDATE plans SET approved_by = ?, locked = ?, updated_at = ? WHERE pairing_id = ?`)
-      .run(JSON.stringify([...approvedBy]), locked ? 1 : 0, updatedAt, pairingId);
+      .prepare(`UPDATE plans SET approved_by = ?, locked = ?, updated_at = ?, sandbox_state = ? WHERE pairing_id = ?`)
+      .run(JSON.stringify([...approvedBy]), locked ? 1 : 0, updatedAt, sandboxState, pairingId);
 
     const plan = this.rowToPlan({
       ...row,
+      sandbox_state: sandboxState,
       approved_by: JSON.stringify([...approvedBy]),
       locked: locked ? 1 : 0,
       updated_at: updatedAt,
@@ -952,6 +1001,8 @@ export class RelayStore {
       version: row.version,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      sandboxId: row.sandbox_id,
+      sandboxState: row.sandbox_state as Plan["sandboxState"],
     };
   }
 }
