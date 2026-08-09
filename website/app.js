@@ -59,3 +59,22 @@ play.addEventListener("click", () => {
   });
   window.setTimeout(run, reducedMotion.matches ? 0 : 500);
 });
+
+const copyQuickstart = document.querySelector("#copy-quickstart");
+if (copyQuickstart) {
+  const fullQuickstart = Array.from(document.querySelectorAll(".code-block code"))
+    .map((el) => el.textContent)
+    .join("\n\n");
+  copyQuickstart.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(fullQuickstart);
+      const original = copyQuickstart.innerHTML;
+      copyQuickstart.textContent = "Copied ✓";
+      window.setTimeout(() => {
+        copyQuickstart.innerHTML = original;
+      }, 1800);
+    } catch {
+      /* clipboard permission denied — the code blocks remain selectable/copyable by hand */
+    }
+  });
+}

@@ -442,6 +442,45 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
 
 /* --- access ----------------------------------------------------------- */
 
+/* --- quickstart --------------------------------------------------------- */
+
+.quickstart { padding: 80px 0 40px; text-align: center; }
+.quickstart h2 { font-size: clamp(32px, 4vw, 44px); margin: 8px 0 0; }
+.quickstart > p:not(.label) { color: var(--muted); font-size: 16px; margin: 18px auto 40px; max-width: 560px; }
+
+.qs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  text-align: left;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.qs-step-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  color: var(--muted);
+  margin: 18px 0 8px;
+}
+.qs-step-label:first-child { margin-top: 0; }
+
+.code-block {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--ink);
+  color: #d7e0ee;
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+.code-block code { background: none; padding: 0; }
+
+#copy-quickstart { margin-top: 32px; }
+
 .access { text-align: center; padding: 120px 20px 140px; }
 .access h2 { font-size: clamp(42px, 5vw, 64px); }
 .access-mark { display: block; margin: 0 auto 24px; color: var(--ink); }
@@ -469,6 +508,7 @@ footer div { display: flex; gap: 20px; }
   .hero, .runway { grid-template-columns: 1fr; gap: 48px; }
   .trust { grid-template-columns: 1fr; gap: 44px; }
   .features { grid-template-columns: repeat(2, 1fr); }
+  .qs-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
