@@ -24,11 +24,19 @@ export interface PairingCode {
   usedAt: string | null;
 }
 
+export type ApprovalPolicy = "unanimous";
+
 export interface Pairing {
   id: string;
   code: string;
+  /** Kept for back-compat: the creator (bootstrap join) and first joiner. */
   agentA: string;
   agentB: string;
+  /** Full membership, length >= 2. The source of truth for N-party pairings. */
+  members: string[];
+  /** Only "unanimous" is read today; the column exists so a quorum policy can
+   *  be added later without a second migration. */
+  approvalPolicy: ApprovalPolicy;
   createdAt: string;
 }
 

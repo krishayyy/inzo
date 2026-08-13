@@ -45,6 +45,9 @@ import {
 import { rpcSafe, type RpcResult } from "./rpcError.js";
 import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, UsageReport, UsageSnapshot } from "./types.js";
 
+/** Bounds join-spam via repeated per-invite codes on one pairing. Mirrors packages/relay's store.ts. */
+const MAX_MEMBERS = 8;
+
 function normalizeDeadline(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== "string") throw badRequest("deadline must be an ISO-8601 string or null");
@@ -67,7 +70,16 @@ CREATE TABLE IF NOT EXISTS pairing (
   code TEXT NOT NULL,
   agent_a TEXT NOT NULL,
   agent_b TEXT NOT NULL,
+  approval_policy TEXT NOT NULL DEFAULT 'unanimous',
   created_at TEXT NOT NULL
+);
+
+-- Full membership. agent_a/agent_b above stay populated for back-compat
+-- (the creator and first joiner) but this table is the source of truth once
+-- a pairing has more than two members. Mirrors packages/relay's schema.
+CREATE TABLE IF NOT EXISTS pairing_members (
+  agent_id  TEXT PRIMARY KEY,
+  joined_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -209,6 +221,20 @@ export class PairingRoom extends DurableObject<Env> {
       agentB,
       createdAt,
     );
+    this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO pairing_members (agent_id, joined_at) VALUES (?, ?)`, agentA, createdAt);
+    this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO pairing_members (agent_id, joined_at) VALUES (?, ?)`, agentB, createdAt);
+  }
+
+  /** Adds a 3rd+ member to an already-initialized pairing (via an invite code). */
+  addMember(agentId: string, joinedAt: string): RpcResult<Pairing> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      if (pairing.members.length >= MAX_MEMBERS) {
+        throw badRequest(`Pairing "${pairing.id}" already has the maximum of ${MAX_MEMBERS} members`);
+      }
+      this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO pairing_members (agent_id, joined_at) VALUES (?, ?)`, agentId, joinedAt);
+      return this.getPairingOrThrow();
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -295,16 +321,31 @@ export class PairingRoom extends DurableObject<Env> {
   // directly from an RPC method.
   // -----------------------------------------------------------------------
 
+  private getMembers(): string[] {
+    const rows = [...this.ctx.storage.sql.exec(`SELECT agent_id FROM pairing_members ORDER BY joined_at ASC`)] as Array<{
+      agent_id: string;
+    }>;
+    return rows.map((row) => row.agent_id);
+  }
+
   private getPairingOrThrow(): Pairing {
     const row = [...this.ctx.storage.sql.exec(`SELECT * FROM pairing LIMIT 1`)][0] as
-      | { id: string; code: string; agent_a: string; agent_b: string; created_at: string }
+      | { id: string; code: string; agent_a: string; agent_b: string; approval_policy: string; created_at: string }
       | undefined;
     if (!row) throw notFound("This pairing does not exist");
-    return { id: row.id, code: row.code, agentA: row.agent_a, agentB: row.agent_b, createdAt: row.created_at };
+    return {
+      id: row.id,
+      code: row.code,
+      agentA: row.agent_a,
+      agentB: row.agent_b,
+      members: this.getMembers(),
+      approvalPolicy: (row.approval_policy as Pairing["approvalPolicy"]) ?? "unanimous",
+      createdAt: row.created_at,
+    };
   }
 
   private assertMemberOrThrow(pairing: Pairing, agentId: string): void {
-    if (agentId !== pairing.agentA && agentId !== pairing.agentB) {
+    if (!pairing.members.includes(agentId)) {
       throw forbidden(`Agent "${agentId}" is not part of pairing "${pairing.id}"`);
     }
   }
@@ -317,8 +358,14 @@ export class PairingRoom extends DurableObject<Env> {
     return rpcSafe(() => this.assertMemberOrThrow(pairing, agentId));
   }
 
-  otherAgent(pairing: Pairing, agentId: string): string {
-    return agentId === pairing.agentA ? pairing.agentB : pairing.agentA;
+  /** Only well-defined for a 2-member pairing — see packages/relay's store.ts equivalent. */
+  otherAgent(pairing: Pairing, agentId: string): RpcResult<string> {
+    return rpcSafe(() => {
+      if (pairing.members.length !== 2) {
+        throw badRequest(`"peer" is ambiguous for pairing "${pairing.id}" (${pairing.members.length} members) — specify an agent id`);
+      }
+      return agentId === pairing.members[0] ? pairing.members[1] : pairing.members[0];
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -475,7 +522,7 @@ export class PairingRoom extends DurableObject<Env> {
         // The owner must be an actual participant of this pairing, not free
         // text — otherwise "don't touch an item you don't own" has nothing
         // real to check a caller's identity against.
-        if (item.owner !== pairing.agentA && item.owner !== pairing.agentB) {
+        if (!pairing.members.includes(item.owner)) {
           throw badRequest(`Item ${index}'s owner "${item.owner}" is not a participant of this pairing`);
         }
         if (item.dependsOn !== undefined) {
@@ -519,7 +566,7 @@ export class PairingRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec(`DELETE FROM plan_item_status WHERE pairing_id = ? AND plan_version != ?`, pairingId, version);
 
       const uniquePrincipals = [...new Set(principals.filter(Boolean))];
-      if (uniquePrincipals.length === 2) {
+      if (uniquePrincipals.length === pairing.members.length) {
         const subject = { kind: "plan" as const, version, hash: planSubjectHash(plan) };
         this.writeConsent({
           pairingId,
@@ -556,7 +603,8 @@ export class PairingRoom extends DurableObject<Env> {
 
       const approvedBy = new Set<string>(JSON.parse(row.approved_by));
       approvedBy.add(agentId);
-      const locked = approvedBy.has(pairing.agentA) && approvedBy.has(pairing.agentB);
+      // Unanimous — the only approvalPolicy read today (see Pairing.approvalPolicy).
+      const locked = pairing.members.every((member) => approvedBy.has(member));
       const updatedAt = new Date().toISOString();
 
       this.ctx.storage.sql.exec(
@@ -774,14 +822,14 @@ export class PairingRoom extends DurableObject<Env> {
 
   getUsage(): CombinedUsage {
     const pairing = this.getPairingOrThrow();
-    return foldUsage(pairing.id, [pairing.agentA, pairing.agentB], this.getUsageReports(pairing.id));
+    return foldUsage(pairing.id, pairing.members, this.getUsageReports(pairing.id));
   }
 
   /** Usage plus the runway derived from it — what agents actually plan against. */
   getUsageSnapshot(now: number = Date.now()): UsageSnapshot {
     const pairing = this.getPairingOrThrow();
     const reports = this.getUsageReports(pairing.id);
-    const usage = foldUsage(pairing.id, [pairing.agentA, pairing.agentB], reports);
+    const usage = foldUsage(pairing.id, pairing.members, reports);
     const runway = computeRunway(this.getBudgetOrThrow(), usage, reports, now);
     return { usage, runway };
   }

@@ -282,12 +282,20 @@ async function route(req: Request, env: Env): Promise<Response> {
     const joined = unwrap(await registry.joinPairing(code, cnf, clientKey));
 
     const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(joined.pairingId));
-    await room.initialize(joined.pairingId, code, joined.agentA, joined.agentB, new Date().toISOString());
-
     const joinerAssurance: Assurance = joined.credential ? "pop" : "bearer";
     const joinerActor: AuditActor = { principal: joined.principalId, agent: joined.agentB, credential: null };
-    await room.appendAudit("pairing.created", joinerActor, joinerAssurance, { code });
-    await room.appendAudit("pairing.joined", joinerActor, joinerAssurance, { peerAgentId: joined.agentA });
+
+    let members: string[];
+    if (joined.isNewPairing) {
+      await room.initialize(joined.pairingId, code, joined.agentA, joined.agentB, new Date().toISOString());
+      await room.appendAudit("pairing.created", joinerActor, joinerAssurance, { code });
+      await room.appendAudit("pairing.joined", joinerActor, joinerAssurance, { peerAgentId: joined.agentA });
+      members = [joined.agentA, joined.agentB];
+    } else {
+      const pairing = unwrap(await room.addMember(joined.agentB, new Date().toISOString()));
+      await room.appendAudit("pairing.joined", joinerActor, joinerAssurance, { code, memberCount: pairing.members.length });
+      members = pairing.members;
+    }
 
     return json(
       {
@@ -300,9 +308,26 @@ async function route(req: Request, env: Env): Promise<Response> {
         peerAgentId: joined.peerAgentId,
         principalId: joined.principalId,
         credential: joined.credential,
+        members,
       },
       201,
     );
+  }
+
+  // POST /pairings/:id/invite — mint a fresh one-shot code inviting a 3rd+
+  // member into an EXISTING pairing. Any current member may invite.
+  if (req.method === "POST" && parts.length === 3 && parts[0] === "pairings" && parts[2] === "invite") {
+    const pairingIdForInvite = parts[1];
+    const auth = await authenticate(req, undefined, registry);
+    if (auth.pairingId !== pairingIdForInvite) throw forbidden("This token does not belong to the requested pairing");
+    const inviteRoom = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(pairingIdForInvite));
+    const pairing = unwrap(await inviteRoom.getPairing());
+    unwrap(await inviteRoom.assertMember(pairing, auth.agentId));
+    if (pairing.members.length >= 8) {
+      throw badRequest(`Pairing "${pairingIdForInvite}" already has the maximum of 8 members`);
+    }
+    const invite = await registry.createInviteCode(pairingIdForInvite, auth.agentId);
+    return json({ code: invite.code, expiresAt: invite.expiresAt }, 201);
   }
 
   // POST /credentials/attenuate
@@ -352,16 +377,20 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (!auth.pairingId) return json({ pairing: null });
     const room = env.PAIRING_ROOM.get(env.PAIRING_ROOM.idFromName(auth.pairingId));
     const pairing = unwrap(await room.getPairing());
-    const peerAgentId = await room.otherAgent(pairing, auth.agentId);
+    // "peer" only makes sense for the original 2-member shape; for 3+
+    // members use `members` and look up each one's own scope/revoked state.
+    const peerAgentId = pairing.members.length === 2 ? unwrap(await room.otherAgent(pairing, auth.agentId)) : null;
     const [budget, peerScope, peerRevoked] = await Promise.all([
       room.getBudget(),
-      registry.getAgentScope(peerAgentId),
-      registry.isAgentRevoked(peerAgentId),
+      peerAgentId ? registry.getAgentScope(peerAgentId) : Promise.resolve(null),
+      peerAgentId ? registry.isAgentRevoked(peerAgentId) : Promise.resolve(null),
     ]);
     return json({
       pairing: {
         id: pairing.id,
         agentId: auth.agentId,
+        members: pairing.members,
+        approvalPolicy: pairing.approvalPolicy,
         peerAgentId,
         createdAt: pairing.createdAt,
         budget,
@@ -439,17 +468,14 @@ async function route(req: Request, env: Env): Promise<Response> {
     requireScope(auth, "plan:propose");
     const { goal, items } = (rawBody ?? {}) as { goal?: string; items?: unknown };
     const pairingForPlan = unwrap(await room.getPairing());
-    const [principalA, principalB] = await Promise.all([
-      registry.agentPrincipal(pairingForPlan.agentA),
-      registry.agentPrincipal(pairingForPlan.agentB),
-    ]);
+    const principals = await Promise.all(pairingForPlan.members.map((agentId) => registry.agentPrincipal(agentId)));
     const plan = unwrap(
       await room.proposePlan(
         pairingId,
         auth.agentId,
         goal ?? "",
         (items ?? []) as never,
-        [principalA, principalB].filter((p): p is string => Boolean(p)),
+        principals.filter((p): p is string => Boolean(p)),
         actorFrom(auth),
         assuranceFrom(auth),
       ),
@@ -516,22 +542,49 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json(await room.getUsageSnapshot());
   }
 
+  // target: "self", "peer" (2-member pairings only), "all" (every other
+  // member), or a specific member agentId. Mirrors packages/relay's route.
   if (sub === "revoke" && req.method === "POST") {
-    const { target } = (rawBody ?? {}) as { target?: "self" | "peer" };
+    const { target } = (rawBody ?? {}) as { target?: string };
     const pairing = unwrap(await room.getPairing());
     unwrap(await room.assertMember(pairing, auth.agentId));
-    const targetAgentId = target === "peer" ? await room.otherAgent(pairing, auth.agentId) : auth.agentId;
-    const result = await registry.revokeAgent(targetAgentId);
-    if (result.revokedCredentialJtis.length > 0) {
-      await room.withdrawByCredentials(result.revokedCredentialJtis);
+
+    // The audit record keeps the literal request value ("self"/"peer"/an
+    // agentId), matching packages/relay's store.ts — not the resolved
+    // agentId, so an auditor sees what the caller actually asked for.
+    const revokeOne = async (targetAgentId: string, targetLabel: string) => {
+      const result = await registry.revokeAgent(targetAgentId);
+      if (result.revokedCredentialJtis.length > 0) {
+        await room.withdrawByCredentials(result.revokedCredentialJtis);
+      }
+      await room.appendAudit("credential.revoked", actorFrom(auth), assuranceFrom(auth), {
+        revokedAgentId: result.revokedAgentId,
+        revokedCredentials: result.revokedCredentialJtis,
+        target: targetLabel,
+      });
+      await room.broadcastRevocation(result.revokedAgentId, result.revokedAt, auth.agentId);
+      return { revokedAgentId: result.revokedAgentId, revokedAt: result.revokedAt, by: auth.agentId };
+    };
+
+    if (target === "all") {
+      const revocations = [];
+      for (const agentId of pairing.members.filter((m) => m !== auth.agentId)) {
+        revocations.push(await revokeOne(agentId, "all"));
+      }
+      return json({ revocations });
     }
-    await room.appendAudit("credential.revoked", actorFrom(auth), assuranceFrom(auth), {
-      revokedAgentId: result.revokedAgentId,
-      revokedCredentials: result.revokedCredentialJtis,
-      target: target ?? "self",
-    });
-    await room.broadcastRevocation(result.revokedAgentId, result.revokedAt, auth.agentId);
-    return json({ revocation: { revokedAgentId: result.revokedAgentId, revokedAt: result.revokedAt, by: auth.agentId } });
+
+    let targetAgentId: string;
+    if (target === undefined || target === "self") {
+      targetAgentId = auth.agentId;
+    } else if (target === "peer") {
+      targetAgentId = unwrap(await room.otherAgent(pairing, auth.agentId));
+    } else if (pairing.members.includes(target)) {
+      targetAgentId = target;
+    } else {
+      throw badRequest(`"${target}" is not a member of pairing "${pairing.id}"`);
+    }
+    return json({ revocation: await revokeOne(targetAgentId, target ?? "self") });
   }
 
   if (sub === "audit" && req.method === "GET") {

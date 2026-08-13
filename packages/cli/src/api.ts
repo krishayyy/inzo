@@ -156,6 +156,8 @@ export function createApi(session: SessionFile) {
         `/pairings/${pairingId}/revoke`,
         { target },
       ),
+    /** Mints a fresh one-shot code inviting a 3rd+ member into this pairing. */
+    invite: (pairingId: string) => call<{ code: string; expiresAt: string }>("POST", `/pairings/${pairingId}/invite`, {}),
     streamUrl: (pairingId: string) => {
       const path = `/pairings/${pairingId}/stream`;
       if (session.credential && session.holderPrivateKey) {

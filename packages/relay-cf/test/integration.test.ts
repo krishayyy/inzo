@@ -110,6 +110,74 @@ describe("pairing lifecycle (v2 bearer)", () => {
   });
 });
 
+describe("N-party pairing", () => {
+  /** Pairs two agents, then invites a 3rd into the SAME pairing via POST /pairings/:id/invite. */
+  async function pairThree() {
+    const { pairingId, a, b } = await pairV2();
+    const invite = await post(`/pairings/${pairingId}/invite`, {}, a.auth);
+    expect(invite.status).toBe(201);
+    expect(invite.body.code).toMatch(/^INZO-/);
+
+    const joined = await post(`/pairings/${invite.body.code}/join`);
+    expect(joined.status).toBe(201);
+    expect(joined.body.pairingId).toBe(pairingId);
+    const c = { agentId: joined.body.agentB as string, auth: { Authorization: `Bearer ${joined.body.agentToken}` } };
+    return { pairingId, a, b, c };
+  }
+
+  it("lets a current member invite a 3rd into the same pairing", async () => {
+    const { pairingId, a, b, c } = await pairThree();
+
+    const mine = await get(`/pairings/mine`, c.auth);
+    expect(mine.body.pairing.members).toEqual(expect.arrayContaining([a.agentId, b.agentId, c.agentId]));
+    expect(mine.body.pairing.members).toHaveLength(3);
+    // "peer" is ambiguous once there are 3+ members.
+    expect(mine.body.pairing.peerAgentId).toBeNull();
+  });
+
+  it("rejects a non-member inviting into a pairing it isn't part of", async () => {
+    const { pairingId } = await pairV2();
+    const outsider = await pairV2();
+    const res = await post(`/pairings/${pairingId}/invite`, {}, outsider.a.auth);
+    expect(res.status).toBe(403);
+  });
+
+  it("requires ALL members' approval to lock a plan, not just two", async () => {
+    const { pairingId, a, b, c } = await pairThree();
+    await post(`/pairings/${pairingId}/plan`, { goal: "ship it", items: [{ owner: a.agentId, task: "build" }] }, a.auth);
+
+    const afterA = await post(`/pairings/${pairingId}/plan/approve`, { planVersion: 1 }, a.auth);
+    expect(afterA.body.plan.locked).toBe(false);
+
+    const afterB = await post(`/pairings/${pairingId}/plan/approve`, { planVersion: 1 }, b.auth);
+    expect(afterB.body.plan.locked).toBe(false); // two of three is not unanimous
+
+    const afterC = await post(`/pairings/${pairingId}/plan/approve`, { planVersion: 1 }, c.auth);
+    expect(afterC.body.plan.locked).toBe(true); // unanimous — all three
+  });
+
+  it("rejects target: 'peer' on revoke once a pairing has 3+ members", async () => {
+    const { pairingId, a } = await pairThree();
+    const res = await post(`/pairings/${pairingId}/revoke`, { target: "peer" }, a.auth);
+    expect(res.status).toBe(400);
+  });
+
+  it("lets a member revoke a specific other member by agentId", async () => {
+    const { pairingId, a, c } = await pairThree();
+    const res = await post(`/pairings/${pairingId}/revoke`, { target: c.agentId }, a.auth);
+    expect(res.status).toBe(200);
+    expect(res.body.revocation.revokedAgentId).toBe(c.agentId);
+  });
+
+  it("target: 'all' revokes every other member at once", async () => {
+    const { pairingId, a, b, c } = await pairThree();
+    const res = await post(`/pairings/${pairingId}/revoke`, { target: "all" }, a.auth);
+    expect(res.status).toBe(200);
+    const revokedIds = res.body.revocations.map((r: { revokedAgentId: string }) => r.revokedAgentId).sort();
+    expect(revokedIds).toEqual([b.agentId, c.agentId].sort());
+  });
+});
+
 describe("messages", () => {
   it("delivers a message sent by one agent to the other, scoped to their pairing", async () => {
     const { pairingId, a, b } = await pairV2();

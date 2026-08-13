@@ -95,6 +95,13 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
 );
 `;
 
+/** Columns added after the first release, for DOs created before them. Mirrors packages/relay's LATE_COLUMNS. */
+const LATE_COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
+  // Set only on an invite code minted by createInviteCode() for an EXISTING
+  // pairing; NULL on the bootstrap code minted by createPairingCode().
+  { table: "pairing_codes", column: "pairing_id", ddl: "TEXT" },
+];
+
 export interface CreatedPairingCode {
   code: string;
   agentId: string;
@@ -116,6 +123,9 @@ export interface JoinedPairing {
   peerAgentId: string;
   principalId: string | null;
   credential: string | null;
+  /** True for the bootstrap join (worker must room.initialize()); false for
+   *  a 3rd+ member joining via an invite code (worker must room.addMember()). */
+  isNewPairing: boolean;
 }
 
 export interface RevokeResult {
@@ -139,6 +149,7 @@ export class Registry extends DurableObject<Env> {
     super(ctx, env);
     this.ready = ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA);
+      this.migrate();
       this.issuerKey = this.loadOrCreateIssuerKey();
       this.loadVerificationKeys();
       for (const row of this.ctx.storage.sql.exec(`SELECT jti FROM credentials WHERE revoked_at IS NOT NULL`)) {
@@ -149,6 +160,15 @@ export class Registry extends DurableObject<Env> {
 
   setIssuerUrl(url: string): void {
     this.issuerUrl = url;
+  }
+
+  private migrate(): void {
+    for (const { table, column, ddl } of LATE_COLUMNS) {
+      const columns = [...this.ctx.storage.sql.exec(`PRAGMA table_info(${table})`)] as Array<{ name: string }>;
+      if (!columns.some((entry) => entry.name === column)) {
+        this.ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+      }
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -437,6 +457,35 @@ export class Registry extends DurableObject<Env> {
     throw new Error("Failed to generate a unique pairing code");
   }
 
+  /**
+   * Invites a 3rd+ member into an EXISTING pairing. Reuses the same one-shot
+   * `pairing_codes` mechanism as the bootstrap code rather than a reusable
+   * multi-use code — mirrors packages/relay's store.ts. Membership and the
+   * MAX_MEMBERS cap are checked by the Worker (via room.assertMember /
+   * room.getPairing) before this is called, since Registry does not own
+   * pairing membership — PairingRoom does.
+   */
+  createInviteCode(pairingId: string, inviterAgentId: string): { code: string; expiresAt: string } {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + PAIRING_CODE_TTL_MS);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = generatePairingCode();
+      const existing = [...this.ctx.storage.sql.exec(`SELECT code FROM pairing_codes WHERE code = ?`, code)];
+      if (existing.length > 0) continue;
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)`,
+        code,
+        inviterAgentId,
+        pairingId,
+        now.toISOString(),
+        expiresAt.toISOString(),
+      );
+      return { code, expiresAt: expiresAt.toISOString() };
+    }
+    throw new Error("Failed to generate a unique pairing code");
+  }
+
   private createPrincipal(): string {
     const id = `prn_${randomUUID()}`;
     this.ctx.storage.sql.exec(`INSERT INTO principals (id, created_at) VALUES (?, ?)`, id, new Date().toISOString());
@@ -463,7 +512,9 @@ export class Registry extends DurableObject<Env> {
         throw rateLimited("Too many failed pairing-code attempts. Wait a few minutes and try again.");
       }
 
-      let row: { code: string; creator_agent_id: string; created_at: string; expires_at: string; used_at: string | null } | undefined;
+      let row:
+        | { code: string; creator_agent_id: string; pairing_id: string | null; created_at: string; expires_at: string; used_at: string | null }
+        | undefined;
       try {
         row = [...this.ctx.storage.sql.exec(`SELECT * FROM pairing_codes WHERE code = ?`, code)][0] as typeof row;
         if (!row) throw notFound(`No pairing code "${code}"`);
@@ -478,8 +529,46 @@ export class Registry extends DurableObject<Env> {
       const joinerAgentId = generateId("agent");
       const agentToken = generateAgentToken();
       const scope = [...ALL_SCOPES];
-      const pairingId = generateId("pairing");
       const now = new Date().toISOString();
+
+      // Invite code for an EXISTING pairing — the Worker calls room.addMember()
+      // rather than room.initialize() for this branch (isNewPairing: false).
+      if (row.pairing_id) {
+        const pairingId = row.pairing_id;
+        this.ctx.storage.sql.exec(`UPDATE pairing_codes SET used_at = ? WHERE code = ?`, now, code);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO agent_tokens (token_hash, agent_id, pairing_id, scope, revoked_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)`,
+          hashAgentToken(agentToken),
+          joinerAgentId,
+          pairingId,
+          JSON.stringify(scope),
+          now,
+        );
+
+        let principalId: string | null = null;
+        let credential: string | null = null;
+        if (cnf) {
+          principalId = this.createPrincipal();
+          credential = this.issueRoot({ agentId: joinerAgentId, principalId, pairingId, cap: scope, cnf }).credential;
+        }
+
+        return {
+          pairingId,
+          // Kept for shape back-compat only — "the creator" and "the joiner",
+          // not meaningful once a pairing has 3+ members.
+          agentA: row.creator_agent_id,
+          agentB: joinerAgentId,
+          code,
+          agentToken,
+          scope,
+          peerAgentId: row.creator_agent_id,
+          principalId,
+          credential,
+          isNewPairing: false,
+        };
+      }
+
+      const pairingId = generateId("pairing");
 
       this.ctx.storage.sql.exec(`UPDATE pairing_codes SET used_at = ? WHERE code = ?`, now, code);
       this.ctx.storage.sql.exec(
@@ -509,6 +598,7 @@ export class Registry extends DurableObject<Env> {
         peerAgentId: row.creator_agent_id,
         principalId,
         credential,
+        isNewPairing: true,
       };
     });
   }

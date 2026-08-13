@@ -129,7 +129,30 @@ export function registerTools(server: McpServer): void {
         return textResult({
           pairingId: pairing.pairingId,
           peerAgentId: pairing.peerAgentId,
+          members: pairing.members,
           message: "Joined pairing successfully.",
+        });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "invite_to_pairing",
+    {
+      title: "Invite a 3rd+ member to this pairing",
+      description:
+        "Mint a fresh one-shot code inviting another agent into the ACTIVE pairing (not a new pairing) — for team workflows beyond the original two. Share the code the same way as a bootstrap pairing code; the invitee's agent calls join_pairing with it.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const invite = await relayClient.inviteToPairing(requirePairingId(), await auth());
+        return textResult({
+          code: invite.code,
+          expiresAt: invite.expiresAt,
+          message: `Share this code with your teammate: ${invite.code}. They call join_pairing with it to join this same pairing.`,
         });
       } catch (err) {
         return errorResult(err);
@@ -262,7 +285,7 @@ export function registerTools(server: McpServer): void {
                 .string()
                 .min(1)
                 .describe(
-                  "Must be one of this pairing's two real agentIds (your own, from sessionState/get_pairing_status, or the peer's) — not a human name or free text. The relay rejects anything else.",
+                  "Must be one of this pairing's real member agentIds (your own, from sessionState/get_pairing_status, or another member's — see the `members` array) — not a human name or free text. The relay rejects anything else.",
                 ),
               task: z.string().min(1).describe("Description of the task"),
               dependsOn: z
@@ -535,10 +558,10 @@ export function registerTools(server: McpServer): void {
         command: z.string().min(1).describe("Executable to run inside the sandbox, e.g. 'npm' or 'pytest'"),
         args: z.array(z.string()).optional().describe("Arguments passed to the command"),
         origin: z
-          .enum(["peer", "self"])
+          .string()
           .default("peer")
           .describe(
-            "Where this command came from. Defaults to 'peer' (the stricter path), which additionally requires the peer's credential to still carry 'commands:run'.",
+            "Where this command came from: 'self', 'peer' (2-member pairings only — the stricter path, additionally requires the peer's credential to still carry 'commands:run'), or a specific member agentId for a 3+ member pairing. Defaults to 'peer'.",
           ),
         timeoutSeconds: z.number().positive().max(600).optional().describe("Kill the command after this long"),
       },
@@ -551,9 +574,26 @@ export function registerTools(server: McpServer): void {
         // A peer-originated command is only allowed while the peer's own
         // credential still authorizes it. Checked live, not from cache: the
         // whole value of the kill switch is that it takes effect immediately.
-        if (origin === "peer") {
+        if (origin !== "self") {
           const { pairing } = await relayClient.getMine(token);
           if (!pairing) throw new Error("No active pairing.");
+          if (origin === "peer") {
+            if (pairing.peerAgentId === null) {
+              throw new Error(
+                `"peer" is ambiguous for a pairing with ${pairing.members?.length ?? "more than 2"} members — pass the specific member agentId as origin instead.`,
+              );
+            }
+          } else if (!pairing.members?.includes(origin)) {
+            throw new Error(`"${origin}" is not a member of this pairing.`);
+          } else {
+            // 3+ member pairings: this relay build does not yet expose a
+            // per-member live scope/revocation check the way it does for
+            // the 2-member "peer" path below, and the check must never be
+            // silently skipped — refuse rather than run unchecked work.
+            throw new Error(
+              `Running a command on behalf of a specific non-peer member ("${origin}") is not yet supported — only 'self' and 'peer' (2-member pairings) can run shared commands today.`,
+            );
+          }
           if (pairing.peerRevoked) {
             throw new Error("The peer's credential has been revoked. Refusing to run their command.");
           }
@@ -571,7 +611,7 @@ export function registerTools(server: McpServer): void {
             );
           }
 
-          if (!pairing.peerScope.includes("commands:run")) {
+          if (!(pairing.peerScope ?? []).includes("commands:run")) {
             throw new Error(
               "The peer's credential does not carry 'commands:run'. Refusing to run a command on their behalf.",
             );
