@@ -4,6 +4,7 @@
    silently standing in for two people. */
 
 const approve = document.querySelector("#approve");
+const revoke = document.querySelector("#revoke");
 const status = document.querySelector("#status");
 const messages = document.querySelector("#messages");
 const proposal = document.querySelector("#proposal");
@@ -36,20 +37,37 @@ function run() {
     status.classList.add("approved");
     proposal.classList.add("locked");
     note("Teammate approved the same version. Starting the build with 2h 41m of runway.");
+    revoke.hidden = false;
   }, delay);
+}
+
+// Shows the kill-switch: either human can revoke instantly, without the
+// other side's cooperation, even after both approvals have landed.
+function pull() {
+  if (revoke.disabled) return;
+  revoke.disabled = true;
+  status.textContent = "Revoked · agent execution halted ✓";
+  status.classList.remove("approved");
+  status.classList.add("revoked");
+  proposal.classList.remove("locked");
+  proposal.classList.add("revoked");
+  note("You revoked the teammate agent's credential. It can no longer read, write, or approve — even mid-task.");
 }
 
 function restore() {
   window.clearTimeout(pending);
   approve.disabled = false;
   approve.innerHTML = 'Approve plan <b aria-hidden="true">→</b>';
+  revoke.hidden = true;
+  revoke.disabled = false;
   status.textContent = "Awaiting human approval";
-  status.classList.remove("approved");
-  proposal.classList.remove("locked");
+  status.classList.remove("approved", "revoked");
+  proposal.classList.remove("locked", "revoked");
   messages.querySelectorAll(".system").forEach((el) => el.remove());
 }
 
 approve.addEventListener("click", run);
+revoke.addEventListener("click", pull);
 reset.addEventListener("click", restore);
 
 play.addEventListener("click", () => {
