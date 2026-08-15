@@ -316,7 +316,15 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
 /* Locked state is signalled by border, background AND the ✓ glyph in the
    status text — never by colour alone. */
 .proposal.locked { border-color: var(--green); background: #f1fbf2; }
+.proposal.revoked { border-color: var(--orange); background: #fdf3ef; }
 #status.approved { color: #217a38; font-weight: 800; }
+#status.revoked { color: var(--orange); font-weight: 800; }
+#revoke {
+  background: none;
+  color: var(--orange);
+  border: 1px solid var(--orange);
+}
+#revoke:disabled { opacity: .55; cursor: default; }
 
 /* --- logos ------------------------------------------------------------ */
 
