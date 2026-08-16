@@ -113,6 +113,48 @@ if (reducedMotion.matches) {
   }, 2500);
 }
 
+// The sticky header keeps its hairline and shadow hidden until the page has
+// actually moved, so at rest it reads as part of the hero.
+const headerBar = document.querySelector("[data-header]");
+if (headerBar) {
+  const syncHeader = () => headerBar.toggleAttribute("data-scrolled", window.scrollY > 8);
+  syncHeader();
+  window.addEventListener("scroll", syncHeader, { passive: true });
+}
+
+// Cursor tilt on the demo panel. Rotation is written to two custom properties
+// and composed by CSS, so the resting angle lives in one place. Skipped
+// entirely under reduced motion, and only bound for devices that actually
+// hover — on touch there is no cursor to follow, and binding it there would
+// leave the panel stuck at whatever angle the last tap produced.
+const demoPanel = document.querySelector("#demo");
+const canHover = window.matchMedia("(hover: hover) and (pointer: fine)");
+
+if (demoPanel && !reducedMotion.matches && canHover.matches) {
+  const MAX_TILT = 5; // degrees — enough to read as depth, not as a gimmick
+  let frame;
+
+  demoPanel.addEventListener("pointermove", (e) => {
+    if (frame) return; // coalesce to one update per frame
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      const r = demoPanel.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width - 0.5;
+      const py = (e.clientY - r.top) / r.height - 0.5;
+      demoPanel.style.setProperty("--tilt-y", `${(px * MAX_TILT * 2).toFixed(2)}deg`);
+      demoPanel.style.setProperty("--tilt-x", `${(-py * MAX_TILT * 2).toFixed(2)}deg`);
+      demoPanel.setAttribute("data-tilt", "");
+    });
+  });
+
+  demoPanel.addEventListener("pointerleave", () => {
+    if (frame) { cancelAnimationFrame(frame); frame = null; }
+    demoPanel.removeAttribute("data-tilt");
+    demoPanel.style.removeProperty("--tilt-x");
+    demoPanel.style.removeProperty("--tilt-y");
+  });
+}
+
 // Spotlight-on-hover for the feature cards: a soft radial glow that tracks
 // the pointer, driven by CSS custom properties set on pointermove.
 document.querySelectorAll(".features article").forEach((card) => {

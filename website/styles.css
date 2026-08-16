@@ -19,10 +19,20 @@
 
 * { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  /* Must sit on html, not just body: an overflow value on body propagates up
+     to the viewport instead of clipping there. `clip` rather than `hidden`
+     so no scroll container is created and the sticky header keeps working. */
+  overflow-x: clip;
+}
 
 body {
   margin: 0;
+  /* Lets the hero's ambient wash bleed past the content column without
+     widening the document. `clip` rather than `hidden` on purpose: `hidden`
+     would make body a scroll container and break the sticky header. */
+  overflow-x: clip;
   background: var(--paper);
   color: var(--ink);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -59,13 +69,43 @@ header, main, footer {
   padding-inline: 36px;
 }
 
+/* Glass bar: translucent + blurred so content dissolves under it rather than
+   hitting a hard edge. The hairline and shadow are held back until the page
+   actually scrolls, so the header reads as part of the hero at rest.
+   backdrop-filter needs the -webkit- prefix for Safari. */
+.header-bar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  /* Fully transparent at rest so the hero's ambient wash runs unbroken behind
+     the logo and nav — a translucent panel here tints that gradient and leaves
+     a visible horizontal seam at the header's bottom edge. */
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition: background .35s var(--ease), border-color .35s var(--ease),
+              box-shadow .35s var(--ease), backdrop-filter .35s var(--ease);
+}
+/* Glass only once content is actually passing underneath. */
+.header-bar[data-scrolled] {
+  background: rgba(251, 252, 254, .72);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  backdrop-filter: blur(14px) saturate(180%);
+  border-bottom-color: var(--line);
+  box-shadow: 0 6px 24px -14px rgba(22, 38, 63, .5);
+}
+
+/* Where the browser cannot blur, fall back to a solid bar — a translucent
+   header with no blur behind it is unreadable, not merely less pretty. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .header-bar[data-scrolled] { background: var(--paper); }
+}
+
 header {
   height: 82px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  border-bottom: 1px solid var(--line);
 }
 
 .brand { display: flex; align-items: center; color: var(--ink); text-decoration: none; }
@@ -142,11 +182,32 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 /* --- hero ------------------------------------------------------------- */
 
 .hero {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr 1.05fr;
   gap: 64px;
   align-items: center;
   padding: 76px 0 96px;
+  /* Establishes the depth the demo panel tilts within. */
+  perspective: 1400px;
+}
+
+/* Soft ambient wash behind the hero. Two offset radial pools rather than a
+   linear fade — an even gradient reads as a flat band, this reads as light.
+   Kept very low alpha so body copy contrast is untouched. */
+/* Bleeds well past the content column so the pools fade out naturally instead
+   of being cut off at the column edge — a clipped radial reads as a tinted
+   rectangle, which is worse than no gradient at all. Safe to bleed because
+   body clips the overflow. */
+.hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -18% -35% 26%;
+  background:
+    radial-gradient(46% 52% at 26% 30%, rgba(31, 92, 224, .16), transparent 72%),
+    radial-gradient(40% 46% at 74% 18%, rgba(47, 156, 74, .11), transparent 74%);
+  pointer-events: none;
 }
 
 .label {
@@ -190,19 +251,37 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 
 /* --- demo ------------------------------------------------------------- */
 
+/* Tilt is driven by two custom properties that app.js updates on pointermove,
+   so the transform itself stays declarative and there is one source of truth
+   for the resting angle. Defaults reproduce the original flat 1.5deg tilt,
+   which is also exactly what a no-JS or reduced-motion visitor keeps. */
 .demo {
+  --tilt-x: 0deg;
+  --tilt-y: 0deg;
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 24px 48px -16px rgba(31, 92, 224, .18), 0 8px 20px -8px rgba(22, 38, 63, .12);
+  border-radius: 20px;
+  box-shadow:
+    0 2px 4px -2px rgba(22, 38, 63, .10),
+    0 12px 24px -12px rgba(22, 38, 63, .16),
+    0 32px 60px -20px rgba(31, 92, 224, .22);
   overflow: hidden;
   transform: rotate(1.5deg);
   transition: transform .5s var(--ease), box-shadow .5s var(--ease);
 }
-.demo:hover, .demo:focus-within {
-  transform: rotate(0);
-  box-shadow: 0 32px 64px -16px rgba(31, 92, 224, .22), 0 12px 28px -8px rgba(22, 38, 63, .14);
+.demo[data-tilt] {
+  transform: rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+  /* Short, so the panel tracks the cursor instead of lagging behind it. */
+  transition: transform .12s linear, box-shadow .5s var(--ease);
 }
+.demo:hover, .demo:focus-within {
+  box-shadow:
+    0 2px 4px -2px rgba(22, 38, 63, .12),
+    0 18px 36px -14px rgba(22, 38, 63, .20),
+    0 48px 80px -24px rgba(31, 92, 224, .30);
+}
+/* Pointer left, or never tilted: settle back to the resting angle. */
+.demo:not([data-tilt]) { transform: rotate(1.5deg); }
 
 .demo-bar, .demo-footer {
   min-height: 42px;
@@ -431,18 +510,39 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .statement h2 { max-width: 860px; }
 .intro { font-size: 18px; color: var(--muted); max-width: 600px; margin: 28px 0 0; }
 
+/* Bento rather than three equal columns: the first card spans both rows so
+   the row has a clear primary and two supporting cards, instead of three
+   items competing at identical weight. */
 .features {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 22px;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 18px;
   padding-bottom: 130px;
+}
+.features article:first-child {
+  grid-row: span 2;
+  /* The tall card gets room to breathe rather than just being stretched. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 38px;
+}
+.features article:first-child h3 { font-size: 26px; margin-top: 28px; }
+.features article:first-child p { font-size: 15px; max-width: 34ch; }
+/* Scaled up so the lead card carries its extra height instead of floating in
+   it — the icon is the only element that can take up that slack. */
+.features article:first-child .feature-icon {
+  width: 52px;
+  height: 52px;
+  font-size: 28px;
+  border-radius: 14px;
 }
 .features article {
   position: relative;
   overflow: hidden;
   padding: 26px;
   border: 1px solid var(--line);
-  border-radius: 13px;
+  border-radius: 16px;
   background: #fff;
   transition: transform .4s var(--ease), border-color .4s var(--ease), box-shadow .4s var(--ease);
 }
@@ -680,7 +780,10 @@ footer div { display: flex; gap: 20px; }
 @media (max-width: 1000px) {
   .hero, .runway { grid-template-columns: 1fr; gap: 48px; }
   .trust { grid-template-columns: 1fr; gap: 44px; }
+  /* Too narrow for the bento to read: the lead card goes full width on top
+     and the other two sit beneath it as a pair. */
   .features { grid-template-columns: repeat(2, 1fr); }
+  .features article:first-child { grid-row: auto; grid-column: 1 / -1; padding: 30px; }
   .qs-grid { grid-template-columns: 1fr; }
 }
 
@@ -698,9 +801,13 @@ footer div { display: flex; gap: 20px; }
     overflow-x: auto;
   }
   .hero { padding: 56px 0 72px; }
-  .demo { transform: none; }
+  /* Must match .demo:not([data-tilt])'s specificity, or the resting tilt
+     defined outside this media query keeps winning here. */
+  .demo, .demo:not([data-tilt]) { transform: none; }
   .statement { padding: 80px 0 52px; }
   .features { grid-template-columns: 1fr; padding-bottom: 80px; }
+  .features article:first-child { padding: 26px; }
+  .features article:first-child h3 { font-size: 19px; }
   .trust { margin: 0; padding: 48px 26px; }
   .runway { padding: 80px 0; }
   .runway-stats > div { padding: 20px 18px; }
@@ -733,9 +840,13 @@ footer div { display: flex; gap: 20px; }
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
-  .demo { transform: none; }
+  /* app.js does not bind the tilt here, but pin the transform anyway so the
+     panel cannot be left rotated by a stale inline custom property. */
+  .demo, .demo[data-tilt], .demo:not([data-tilt]) { transform: none; }
   .button:hover { transform: none; }
   .reveal { opacity: 1; transform: none; }
+  .marquee-item:hover { transform: none; }
+  .features article:hover { transform: none; }
   /* app.js also skips cloning here, so this is a single static row. Drop the
      edge fade (nothing is moving under it) and let it scroll by hand instead. */
   .marquee-track[data-ready] { animation: none; transform: none; }
