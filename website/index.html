@@ -46,10 +46,6 @@
         <a class="button" href="#access">Request early access</a>
         <button class="link-button" id="play-demo" type="button">Try the live demo <b aria-hidden="true">→</b></button>
       </div>
-      <div class="proof">
-        <div class="avatars" aria-hidden="true"><i></i><i></i><i></i></div>
-        <span>Works with Claude Code, Cursor, Codex — anything that speaks MCP.</span>
-      </div>
     </div>
 
     <section class="demo" id="demo" aria-label="Interactive Inzo product demonstration">
@@ -103,21 +99,30 @@
     </section>
   </section>
 
-  <!-- Only clients Inzo is actually known to work with (see README). "Works
-       with" is a claim, not decoration. Each item ships as a wordmark and
-       upgrades itself to a real logo once brand/logos/<data-logo>.svg exists —
-       see brand/logos/README.md. One row is authored here; app.js clones it to
-       fill the track, so with JS off this stays a plain static row. -->
+  <!-- The claim here is model agnosticism, which is true by construction: Inzo
+       authenticates and relays at the protocol layer and never sees the model.
+       That is what lets clients (Claude Code, Codex, Cursor) and model
+       runtimes (Qwen, Ollama) sit in one row honestly — the common denominator
+       is MCP, not any particular model.
+
+       Each item ships as a wordmark and upgrades itself to a real logo once
+       brand/logos/<data-logo>.svg exists — see brand/logos/README.md. One row
+       is authored here; app.js clones it to fill the track, so with JS off
+       this stays a plain static row. -->
   <section class="logos reveal">
-    <p class="logos-label">One place for the agents your team already uses</p>
+    <p class="logos-label">
+      <strong>Model agnostic.</strong> Inzo pairs any two agents that speak MCP —
+      whatever model is behind them.
+    </p>
 
     <div class="marquee" data-marquee>
       <div class="marquee-track">
         <ul class="marquee-row">
-          <li class="marquee-item" data-logo="claude" data-label="Claude">Claude</li>
-          <li class="marquee-item" data-logo="openai" data-label="OpenAI Codex">Codex</li>
+          <li class="marquee-item" data-logo="claude" data-label="Claude Code">Claude Code</li>
+          <li class="marquee-item" data-logo="codex" data-label="Codex">Codex</li>
           <li class="marquee-item" data-logo="cursor" data-label="Cursor">Cursor</li>
-          <li class="marquee-item" data-logo="mcp" data-label="MCP">MCP</li>
+          <li class="marquee-item" data-logo="qwen" data-label="Qwen">Qwen</li>
+          <li class="marquee-item" data-logo="ollama" data-label="Ollama">Ollama</li>
         </ul>
       </div>
     </div>
@@ -270,8 +275,27 @@
     <p class="label">INZO EARLY BUILD</p>
     <h2>The next great build<br>should feel <em>shared.</em></h2>
     <p>Open source, Apache-2.0. Bring your own relay or use ours.</p>
+    <!-- Netlify Forms: the attributes below are read from the deployed HTML at
+         build time, which is what registers the "waitlist" form. Submissions
+         land in the Netlify dashboard (Forms -> waitlist). -->
+    <form class="waitlist" name="waitlist" method="POST" data-netlify="true"
+          netlify-honeypot="company" action="/?joined=1">
+      <input type="hidden" name="form-name" value="waitlist">
+      <p class="waitlist-hp" aria-hidden="true">
+        <label>Company <input name="company" tabindex="-1" autocomplete="off"></label>
+      </p>
+      <div class="waitlist-row">
+        <label class="visually-hidden" for="waitlist-email">Email address</label>
+        <input id="waitlist-email" name="email" type="email" required
+               autocomplete="email" placeholder="you@company.com"
+               aria-describedby="waitlist-note">
+        <button class="button" type="submit">Request early access</button>
+      </div>
+      <p class="waitlist-note" id="waitlist-note">We'll email you when your relay slot is ready. No list, no spam.</p>
+      <p class="waitlist-status" role="status" aria-live="polite"></p>
+    </form>
     <div class="access-actions">
-      <a class="button" href="mailto:hello@inzo.dev?subject=Inzo early access">Request early access</a>
+      <a class="link-button" href="mailto:hello@inzo.dev?subject=Inzo early access">Or just email us <b aria-hidden="true">→</b></a>
     </div>
   </section>
 

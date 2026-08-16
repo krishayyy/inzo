@@ -188,26 +188,6 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 
 .hero-actions { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 
-.proof {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 36px;
-}
-.avatars { display: flex; }
-.avatars i {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--paper);
-  border-radius: 50%;
-  margin-left: -5px;
-}
-.avatars i:nth-child(1) { background: var(--blue); }
-.avatars i:nth-child(2) { background: var(--green); }
-.avatars i:nth-child(3) { background: var(--orange); }
-
 /* --- demo ------------------------------------------------------------- */
 
 .demo {
@@ -410,19 +390,22 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .marquee-item {
   display: flex;
   align-items: center;
+  gap: 10px;
   color: var(--ink);
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -.01em;
   white-space: nowrap;
-  opacity: .55;
-  transition: opacity .3s var(--ease);
+  transition: transform .3s var(--ease);
 }
-.marquee-item:hover { opacity: 1; }
+/* Marks carry real brand colour, so they are shown at full strength rather
+   than dimmed — a washed-out logo row reads as filler. Hover lifts instead. */
+.marquee-item:hover { transform: translateY(-2px); }
 
 /* Fixed height, auto width — normalises logos with very different aspect
-   ratios to one optical size. */
-.logo-mark { display: block; height: 24px; width: auto; }
+   ratios to one optical size. 22px sits right against the 15px label
+   without either one dominating. */
+.logo-mark { display: block; height: 22px; width: auto; }
 
 .marquee-toggle {
   margin: 18px 0 0;
@@ -633,6 +616,47 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .access > p { font-size: 17px; margin: 20px auto 28px; }
 .access-actions { display: flex; gap: 24px; align-items: center; justify-content: center; flex-wrap: wrap; }
 
+/* Screen-reader-only, but still focusable and still announced. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.waitlist { max-width: 520px; margin: 0 auto 20px; }
+/* Honeypot: hidden from people, left in the DOM for bots to fill in. */
+.waitlist-hp { position: absolute; left: -9999px; }
+
+.waitlist-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.waitlist-row input {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  transition: border-color .3s var(--ease), box-shadow .3s var(--ease);
+}
+.waitlist-row input::placeholder { color: var(--muted); }
+.waitlist-row input:hover { border-color: #c6d1e0; }
+.waitlist-row input:focus-visible { border-color: var(--blue); }
+
+.waitlist-note { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
+.waitlist-status { font-size: 14px; font-weight: 700; margin: 12px 0 0; min-height: 21px; }
+.waitlist-status[data-state="ok"] { color: var(--green); }
+.waitlist-status[data-state="error"] { color: var(--orange); }
+/* Success replaces the fields, so the note would be describing nothing. */
+.waitlist.is-done .waitlist-row, .waitlist.is-done .waitlist-note { display: none; }
+
 footer {
   min-height: 100px;
   display: flex;
@@ -679,7 +703,6 @@ footer div { display: flex; gap: 20px; }
   .runway-stats > div { padding: 20px 18px; }
   .runway-stats dd { font-size: 26px; }
   .access { padding: 90px 12px 100px; }
-  .proof { align-items: flex-start; }
   .marquee-row { gap: 40px; padding-right: 40px; }
   .marquee-item { font-size: 14px; }
   .logo-mark { height: 20px; }

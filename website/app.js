@@ -151,11 +151,17 @@ if (marqueeTrack && marqueeRow && !reducedMotion.matches) {
   }
 }
 
-// Upgrade each wordmark to a real logo if one has been dropped into
+// Add the real mark alongside each name once one has been dropped into
 // brand/logos/. Probing with an off-DOM Image means a missing file costs
-// nothing visible — no broken-image glyph, no layout shift, just the wordmark
-// staying put. Runs after cloning so the copies upgrade too; the browser
+// nothing visible — no broken-image glyph, no layout shift, just the plain
+// name staying put. Runs after cloning so the copies upgrade too; the browser
 // serves them from cache, so it stays one request per logo.
+//
+// The name is kept rather than replaced: at 22px these marks are not all
+// widely recognised on sight, and a row of unlabelled glyphs says less than
+// a row of labelled ones. That makes the mark purely decorative, so its alt
+// is always empty — the adjacent text is already the accessible name, and
+// duplicating it would make screen readers announce each client twice.
 document.querySelectorAll(".marquee-item[data-logo]").forEach((item) => {
   const src = `brand/logos/${item.dataset.logo}.svg`;
   const probe = new Image();
@@ -163,9 +169,8 @@ document.querySelectorAll(".marquee-item[data-logo]").forEach((item) => {
     const mark = document.createElement("img");
     mark.className = "logo-mark";
     mark.src = src;
-    // Clones are aria-hidden, so their alt text would be redundant noise.
-    mark.alt = item.closest("[aria-hidden='true']") ? "" : item.dataset.label ?? "";
-    item.replaceChildren(mark);
+    mark.alt = "";
+    item.prepend(mark);
   });
   probe.src = src;
 });
@@ -185,6 +190,42 @@ if (copyQuickstart) {
       }, 1800);
     } catch {
       /* clipboard permission denied — the code blocks remain selectable/copyable by hand */
+    }
+  });
+}
+
+/* --- waitlist ----------------------------------------------------------- */
+
+/* Netlify accepts form posts to any path on the site as long as the body
+   carries `form-name`. Posting via fetch keeps people on the page; without
+   JS the plain form POST still works and Netlify renders its own thank-you. */
+const waitlist = document.querySelector(".waitlist");
+if (waitlist) {
+  const status = waitlist.querySelector(".waitlist-status");
+  const submit = waitlist.querySelector("button[type='submit']");
+
+  waitlist.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!waitlist.reportValidity()) return;
+
+    submit.disabled = true;
+    status.dataset.state = "";
+    status.textContent = "Sending…";
+
+    try {
+      const response = await fetch("/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(new FormData(waitlist)).toString(),
+      });
+      if (!response.ok) throw new Error(`relay responded ${response.status}`);
+      waitlist.classList.add("is-done");
+      status.dataset.state = "ok";
+      status.textContent = "You're on the list ✓ We'll be in touch.";
+    } catch {
+      submit.disabled = false;
+      status.dataset.state = "error";
+      status.textContent = "That didn't send. Email hello@inzo.dev and we'll add you by hand.";
     }
   });
 }
