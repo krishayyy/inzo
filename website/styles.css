@@ -5,16 +5,34 @@
 
 :root {
   --ink: #18202d;
-  --muted: #5a6878;        /* 5.55:1 on --paper — AA */
-  --line: #dfe5ed;
-  --blue: #1f5ce0;         /* 5.58:1 on --paper — AA */
+  --muted: #5a6878;        /* 5.18:1 on --paper, 5.70:1 on --surface — AA */
+  --line: #e2e3e7;
+  --blue: #1f5ce0;         /* 5.21:1 on --paper, 5.73:1 on --surface — AA */
   --green: #2f9c4a;
   --orange: #d94f2f;
-  --paper: #fbfcfe;
-  --soft: #f2f5f9;
+
+  /* Ground is a soft neutral rather than white, so white surfaces read as
+     objects sitting on it. Everything above stays AA against this value. */
+  --paper: #f4f4f5;
+  --surface: #ffffff;
+  --soft: #ebecef;
   --dark-muted: #b9c3d1;   /* 9.19:1 on --ink — AAA */
   --focus: #1f5ce0;
   --ease: cubic-bezier(.22, 1, .36, 1);
+
+  /* Glass: a translucent shell plus a top inner highlight, which is what sells
+     a lit edge rather than a flat grey panel. */
+  --glass: rgba(255, 255, 255, .55);
+  --glass-edge: rgba(255, 255, 255, .75);
+  --glass-hi: inset 0 1px 0 rgba(255, 255, 255, .9);
+
+  /* Diffused and tinted rather than black — hard grey shadows are the fastest
+     way to make a light UI look cheap. */
+  --shad-sm: 0 1px 2px rgba(24, 32, 45, .04), 0 4px 12px -6px rgba(24, 32, 45, .08);
+  --shad-lg:
+    0 2px 6px -2px rgba(24, 32, 45, .06),
+    0 16px 32px -12px rgba(24, 32, 45, .10),
+    0 48px 90px -32px rgba(70, 90, 160, .18);
 }
 
 * { box-sizing: border-box; }
@@ -87,7 +105,7 @@ header, main, footer {
 }
 /* Glass only once content is actually passing underneath. */
 .header-bar[data-scrolled] {
-  background: rgba(251, 252, 254, .72);
+  background: rgba(248, 248, 249, .72);
   -webkit-backdrop-filter: blur(14px) saturate(180%);
   backdrop-filter: blur(14px) saturate(180%);
   border-bottom-color: var(--line);
@@ -153,6 +171,28 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .button:active { transform: translateY(0) scale(.97); box-shadow: 0 1px 2px rgba(24, 32, 45, .08); }
 .button-small { padding: 10px 14px; }
 
+/* Primary CTA: pill, with the arrow given its own inset disc rather than
+   floating loose beside the label. The disc slides on hover so the button has
+   internal movement, not just a colour change. */
+.button-lg {
+  gap: 12px;
+  padding: 10px 10px 10px 24px;
+  border-radius: 999px;
+  font-size: 15px;
+}
+.button-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .16);
+  font-size: 15px;
+  transition: transform .45s var(--ease), background .45s var(--ease);
+}
+.button-lg:hover .button-chev { transform: translateX(3px); background: rgba(255, 255, 255, .26); }
+
 .link-button {
   position: relative;
   border: 0;
@@ -195,27 +235,41 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 /* Soft ambient wash behind the hero. Two offset radial pools rather than a
    linear fade — an even gradient reads as a flat band, this reads as light.
    Kept very low alpha so body copy contrast is untouched. */
-/* Bleeds well past the content column so the pools fade out naturally instead
-   of being cut off at the column edge — a clipped radial reads as a tinted
-   rectangle, which is worse than no gradient at all. Safe to bleed because
-   body clips the overflow. */
+/* Iridescent bloom. Four low-alpha pools in different hues, overlapped so the
+   eye reads one soft oil-slick rather than four discs — a single blue wash
+   looks like a gradient, this looks like light. Bleeds past the column so the
+   pools fade out naturally instead of being cut off; safe because html clips
+   the overflow. */
 .hero::before {
   content: "";
   position: absolute;
   z-index: -1;
-  inset: -18% -35% 26%;
+  inset: -20% -35% 18%;
   background:
-    radial-gradient(46% 52% at 26% 30%, rgba(31, 92, 224, .16), transparent 72%),
-    radial-gradient(40% 46% at 74% 18%, rgba(47, 156, 74, .11), transparent 74%);
+    radial-gradient(38% 44% at 22% 26%, rgba(120, 145, 255, .30), transparent 70%),
+    radial-gradient(34% 40% at 46% 12%, rgba(214, 175, 255, .24), transparent 72%),
+    radial-gradient(36% 42% at 72% 24%, rgba(255, 190, 175, .22), transparent 72%),
+    radial-gradient(40% 46% at 88% 8%, rgba(150, 225, 220, .20), transparent 74%);
+  filter: blur(28px);
   pointer-events: none;
 }
 
+/* Eyebrow: a bordered pill rather than loose caps, so it reads as a deliberate
+   object above the headline instead of stray small text. */
 .label {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
   font-size: 11px;
   color: var(--blue);
   font-weight: 800;
-  letter-spacing: .1em;
-  margin: 0 0 18px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  margin: 0 0 26px;
+  padding: 7px 14px;
+  border: 1px solid rgba(31, 92, 224, .22);
+  border-radius: 999px;
+  background: rgba(31, 92, 224, .06);
 }
 .label span {
   display: inline-block;
@@ -223,7 +277,7 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   height: 7px;
   background: var(--green);
   border-radius: 50%;
-  margin-right: 7px;
+  margin-right: 8px;
 }
 
 .hero h1, .statement h2, .trust h2, .access h2, .runway h2 {
@@ -255,19 +309,36 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
    so the transform itself stays declarative and there is one source of truth
    for the resting angle. Defaults reproduce the original flat 1.5deg tilt,
    which is also exactly what a no-JS or reduced-motion visitor keeps. */
+/* Double bezel: a translucent glass tray holding a solid white core, with the
+   inner radius mathematically inset from the outer so the curves stay
+   concentric. The tray is what the bloom diffuses through — the core stays
+   opaque because the demo content inside has to remain readable. */
 .demo {
   --tilt-x: 0deg;
   --tilt-y: 0deg;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  box-shadow:
-    0 2px 4px -2px rgba(22, 38, 63, .10),
-    0 12px 24px -12px rgba(22, 38, 63, .16),
-    0 32px 60px -20px rgba(31, 92, 224, .22);
-  overflow: hidden;
+  --tray: 7px;
+  --radius-outer: 26px;
+  padding: var(--tray);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-outer);
+  box-shadow: var(--shad-lg), var(--glass-hi);
   transform: rotate(1.5deg);
   transition: transform .5s var(--ease), box-shadow .5s var(--ease);
+}
+.demo > * {
+  background: var(--surface);
+  overflow: hidden;
+}
+.demo > :first-child {
+  border-top-left-radius: calc(var(--radius-outer) - var(--tray));
+  border-top-right-radius: calc(var(--radius-outer) - var(--tray));
+}
+.demo > :last-child {
+  border-bottom-left-radius: calc(var(--radius-outer) - var(--tray));
+  border-bottom-right-radius: calc(var(--radius-outer) - var(--tray));
 }
 .demo[data-tilt] {
   transform: rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
@@ -276,9 +347,10 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 }
 .demo:hover, .demo:focus-within {
   box-shadow:
-    0 2px 4px -2px rgba(22, 38, 63, .12),
-    0 18px 36px -14px rgba(22, 38, 63, .20),
-    0 48px 80px -24px rgba(31, 92, 224, .30);
+    0 2px 6px -2px rgba(24, 32, 45, .08),
+    0 22px 44px -14px rgba(24, 32, 45, .14),
+    0 64px 110px -34px rgba(70, 90, 160, .26),
+    var(--glass-hi);
 }
 /* Pointer left, or never tilted: settle back to the resting angle. */
 .demo:not([data-tilt]) { transform: rotate(1.5deg); }
@@ -291,7 +363,7 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  background: #f8fafc;
+  background: #fafafb;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
@@ -383,7 +455,7 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   justify-content: space-between;
   gap: 12px;
   padding: 13px;
-  background: #f7f9fc;
+  background: #fafafb;
   border: 1px solid var(--line);
   border-radius: 10px;
 }
@@ -430,13 +502,14 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .logos {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 30px 0;
+  padding: 64px 0 56px;
 }
 .logos-label {
-  margin: 0 0 20px;
+  margin: 0 0 44px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 16px;
 }
+.logos-label strong { color: var(--ink); }
 
 /* Edge fade so marks don't hard-cut at the container edge. The -webkit-
    prefix is not optional here — it is what makes this work in Safari. */
@@ -461,30 +534,30 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .marquee-row {
   display: flex;
   align-items: center;
-  gap: 64px;
-  padding: 0 64px 0 0;
+  gap: 88px;
+  padding: 0 88px 0 0;
   margin: 0;
   list-style: none;
 }
 .marquee-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 18px;
   color: var(--ink);
-  font-size: 15px;
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: -.01em;
+  letter-spacing: -.025em;
   white-space: nowrap;
-  transition: transform .3s var(--ease);
+  transition: transform .45s var(--ease);
 }
 /* Marks carry real brand colour, so they are shown at full strength rather
    than dimmed — a washed-out logo row reads as filler. Hover lifts instead. */
-.marquee-item:hover { transform: translateY(-2px); }
+.marquee-item:hover { transform: translateY(-3px); }
 
 /* Fixed height, auto width — normalises logos with very different aspect
-   ratios to one optical size. 22px sits right against the 15px label
-   without either one dominating. */
-.logo-mark { display: block; height: 22px; width: auto; }
+   ratios to one optical size. Sized to lead the row rather than annotate it:
+   the marks are the proof here, the wordmark just names them. */
+.logo-mark { display: block; height: 46px; width: auto; }
 
 .marquee-toggle {
   margin: 18px 0 0;
@@ -542,8 +615,8 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   overflow: hidden;
   padding: 26px;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  background: #fff;
+  border-radius: 20px;
+  background: var(--surface);
   transition: transform .4s var(--ease), border-color .4s var(--ease), box-shadow .4s var(--ease);
 }
 .features article::before {
@@ -588,10 +661,16 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   padding: 80px 70px;
   background: var(--ink);
   color: #fff;
-  border-radius: 18px;
+  border-radius: 24px;
 }
 .trust h2 { font-size: clamp(38px, 4vw, 52px); }
-.trust .label { color: #8fb0ff; }
+/* Same pill on the dark panel: the light-mode blue tint would read as a smudge
+   against --ink, so border and fill are re-derived from white. */
+.trust .label {
+  color: #8fb0ff;
+  border-color: rgba(143, 176, 255, .28);
+  background: rgba(143, 176, 255, .10);
+}
 .trust > div > p:not(.label) { margin-top: 22px; color: var(--dark-muted); max-width: 420px; font-size: 15px; }
 .trust-note a { color: #8fb0ff; font-weight: 700; }
 
@@ -639,11 +718,11 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   margin: 0;
   background: var(--line);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 20px;
   overflow: hidden;
 }
 .runway-stats > div {
-  background: #fff;
+  background: var(--surface);
   padding: 28px 26px;
   transition: background .35s var(--ease);
 }
@@ -668,6 +747,9 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 /* --- quickstart --------------------------------------------------------- */
 
 .quickstart { padding: 80px 0 40px; text-align: center; }
+/* width:max-content stops the pill inheriting the centred text alignment, so
+   these two need explicit auto margins to sit centred. */
+.quickstart .label, .access .label { margin-inline: auto; }
 .quickstart h2 { font-size: clamp(32px, 4vw, 44px); margin: 8px 0 0; }
 .quickstart > p:not(.label) { color: var(--muted); font-size: 16px; margin: 18px auto 40px; max-width: 560px; }
 
@@ -740,7 +822,7 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
   padding: 14px 16px;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 14px;
@@ -813,9 +895,11 @@ footer div { display: flex; gap: 20px; }
   .runway-stats > div { padding: 20px 18px; }
   .runway-stats dd { font-size: 26px; }
   .access { padding: 90px 12px 100px; }
-  .marquee-row { gap: 40px; padding-right: 40px; }
-  .marquee-item { font-size: 14px; }
-  .logo-mark { height: 20px; }
+  .logos { padding: 44px 0 38px; }
+  .logos-label { font-size: 15px; margin-bottom: 30px; }
+  .marquee-row { gap: 52px; padding-right: 52px; }
+  .marquee-item { font-size: 17px; gap: 12px; }
+  .logo-mark { height: 32px; }
 }
 
 /* --- scroll reveal ------------------------------------------------------
@@ -824,12 +908,16 @@ footer div { display: flex; gap: 20px; }
    enhanced: no-JS visitors get the <noscript> override in <head>, and
    reduced-motion visitors get the override below. */
 
+/* Entry carries a slight defocus as well as a rise, so content resolves into
+   place rather than simply appearing. Only transform/opacity/filter animate —
+   nothing here triggers layout. */
 .reveal {
   opacity: 0;
-  transform: translateY(28px);
-  transition: opacity .7s var(--ease), transform .7s var(--ease);
+  transform: translateY(34px);
+  filter: blur(6px);
+  transition: opacity .85s var(--ease), transform .85s var(--ease), filter .85s var(--ease);
 }
-.reveal.in-view { opacity: 1; transform: translateY(0); }
+.reveal.in-view { opacity: 1; transform: translateY(0); filter: blur(0); }
 
 /* --- motion ----------------------------------------------------------- */
 
@@ -844,7 +932,7 @@ footer div { display: flex; gap: 20px; }
      panel cannot be left rotated by a stale inline custom property. */
   .demo, .demo[data-tilt], .demo:not([data-tilt]) { transform: none; }
   .button:hover { transform: none; }
-  .reveal { opacity: 1; transform: none; }
+  .reveal { opacity: 1; transform: none; filter: none; }
   .marquee-item:hover { transform: none; }
   .features article:hover { transform: none; }
   /* app.js also skips cloning here, so this is a single static row. Drop the
