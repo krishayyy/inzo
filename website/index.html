@@ -31,8 +31,11 @@
       <a href="#trust">Trust</a>
       <a href="#runway">Runway</a>
       <a href="#quickstart">Quickstart</a>
+      <a href="#faq">FAQ</a>
     </nav>
-    <a class="button button-small" href="#access">Request access</a>
+    <!-- Same words as the hero and the form: one action should have one name
+         everywhere, or it reads as three different offers. -->
+    <a class="button button-small" href="#access">Request early access</a>
   </header>
 </div>
 
@@ -42,10 +45,11 @@
     <div class="hero-copy">
       <p class="label"><span aria-hidden="true"></span> Agent coordination, human control</p>
       <h1>Two agents.<br>One plan.<br><em>Both humans.</em></h1>
-      <p>Inzo pairs your coding agent with a teammate's. They negotiate the goal and the
-      task split while you both watch. Nothing runs until you both approve the same
-      plan — and every action they take carries a credential either of you can verify,
-      or revoke.</p>
+      <!-- Kept to two sentences. The credential/revocation detail moved out to the
+           trust section, which explains it properly rather than compressing it into
+           a clause nobody parses on first read. -->
+      <p>Inzo pairs your coding agent with a teammate's. They negotiate the plan
+      while you both watch — and nothing runs until you both approve it.</p>
       <div class="hero-actions">
         <a class="button button-lg" href="#access">
           Request early access
@@ -53,6 +57,18 @@
         </a>
         <button class="link-button" id="play-demo" type="button">Try the live demo <b aria-hidden="true">→</b></button>
       </div>
+
+      <!-- Proof, not testimonials. Inzo has no users yet, so every item here is
+           something a visitor can check for themselves right now: the packages
+           are on the public npm registry, the licence is in the repo, and the
+           relay genuinely runs on your own machine. No GitHub or spec links —
+           that repo is private and they would 404. -->
+      <ul class="proof-strip">
+        <li><code>npm i -g inzo-cli</code></li>
+        <li>Apache-2.0</li>
+        <li>Self-host the relay, or use ours</li>
+        <li>No account required</li>
+      </ul>
     </div>
 
     <section class="demo" id="demo" aria-label="Interactive Inzo product demonstration">
@@ -275,6 +291,56 @@
       </div>
     </div>
     <button class="link-button" id="copy-quickstart" type="button">Copy full quickstart <b aria-hidden="true">⧉</b></button>
+  </section>
+
+  <!-- Real questions a skeptical developer would actually ask, answered from
+       what's true in README.md/docs/PROTOCOL.md — nothing here is invented to
+       sound reassuring. <details>/<summary> rather than a hand-rolled JS
+       accordion: native keyboard support, works with JS off, and one <details>
+       per item means opening one doesn't require closing the others. -->
+  <section class="faq reveal" id="faq">
+    <p class="label">QUESTIONS</p>
+    <h2>Before you pair.</h2>
+    <div class="faq-list" data-reveal-group>
+      <details class="faq-item reveal">
+        <summary>What does Inzo actually see?</summary>
+        <p>The relay carries messages, the proposed plan, and usage numbers between
+        the two agents — not your source code. Commands run in a local Docker
+        sandbox scoped to one directory on the machine that issued them, not on
+        the relay.</p>
+      </details>
+      <details class="faq-item reveal">
+        <summary>Can I self-host the relay?</summary>
+        <p>Yes — it's a single Node process with a SQLite file. Run it locally,
+        on Fly.io, or on Render; config for all three is in the repo. The
+        hosted relay is there so you don't have to, not because you're required
+        to use it.</p>
+      </details>
+      <details class="faq-item reveal">
+        <summary>What if my teammate's agent starts doing something I don't like?</summary>
+        <p>Revoke their credential. It's instant, doesn't need their side's
+        cooperation, and kills the whole delegated subtree — reads and writes,
+        not just new commands.</p>
+      </details>
+      <details class="faq-item reveal">
+        <summary>What happens if the relay goes down?</summary>
+        <p>Today, one relay instance handles a pairing's message fan-out — fine
+        for a team or a hackathon, not yet a multi-tenant service. v3's
+        credentials and consent are signed by keys the relay never holds, so it
+        can't lie about what happened. It can still drop messages or stall,
+        which is exactly why self-hosting is a real option, not a footnote.</p>
+      </details>
+      <details class="faq-item reveal">
+        <summary>Do I need an account?</summary>
+        <p>No. No accounts, no billing — a pairing is the only unit. A short
+        code authorizes exactly two agents to talk, and that's it.</p>
+      </details>
+      <details class="faq-item reveal">
+        <summary>Is this open source?</summary>
+        <p>Yes, Apache-2.0. The self-hostable core is meant to stay open; a
+        hosted offering is a separate, later concern.</p>
+      </details>
+    </div>
   </section>
 
   <section class="access reveal" id="access">
