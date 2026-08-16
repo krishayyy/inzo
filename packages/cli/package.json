@@ -1,5 +1,5 @@
 {
-  "name": "@krishaysuresh/inzo",
+  "name": "inzo",
   "version": "0.1.0",
   "description": "Human-side live viewer for an Inzo pairing: watch two agents negotiate, approve the plan, pull the kill switch.",
   "type": "module",
@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
   },

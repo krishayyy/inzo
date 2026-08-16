@@ -29,8 +29,10 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
     });
   });
 
-  // POST /pairings/:code/join — consume a code, create the pairing, issue the
-  // joiner's credential.
+  // POST /pairings/:code/join — consume a code. Either creates the pairing
+  // (bootstrap code from POST /pairings) or adds the caller as a member of an
+  // existing pairing (invite code from POST /pairings/:id/invite). Issues the
+  // joiner's credential either way.
   //
   // Only FAILED attempts count against the limiter: a code is one-shot, so a
   // successful join cannot be replayed anyway, and penalizing success would
@@ -46,18 +48,27 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
       limiter.clear(key);
       res.status(201).json({
         pairingId: pairing.id,
-        agentId: pairing.agentB,
+        agentId: pairing.members[pairing.members.length - 1],
         principalId: pairing.principalId,
         credential: pairing.credential,
         agentToken: pairing.agentToken,
         scope: pairing.scope,
         cap: pairing.scope,
         peerAgentId: pairing.peerAgentId,
+        members: pairing.members,
       });
     } catch (err) {
       if (err instanceof RelayError && [404, 409, 410].includes(err.status)) limiter.recordFailure(key);
       next(err);
     }
+  });
+
+  // POST /pairings/:id/invite — mint a fresh one-shot code inviting a 3rd+
+  // member into an EXISTING pairing. Any current member may invite; the
+  // resulting code is joined the same way as the original bootstrap code.
+  router.post("/:id/invite", requireAuth(store), (req, res) => {
+    const pairingCode = store.createInviteCode(req.params.id, req.inzoAuth!.agentId);
+    res.status(201).json({ code: pairingCode.code, expiresAt: pairingCode.expiresAt });
   });
 
   // GET /pairings/mine — the creator polls this after sharing their code to
@@ -72,21 +83,26 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
       return;
     }
     const pairing = store.getPairing(identity.pairingId);
-    const peerAgentId = store.otherAgent(pairing, identity.agentId);
+    // "peer" only makes sense for the original 2-member shape; for 3+
+    // members use `members` and look up each one's own scope/revoked state.
+    const peerAgentId = pairing.members.length === 2 ? store.otherAgent(pairing, identity.agentId) : null;
     res.json({
       pairing: {
         id: pairing.id,
         agentId: identity.agentId,
+        members: pairing.members,
+        approvalPolicy: pairing.approvalPolicy,
         peerAgentId,
         createdAt: pairing.createdAt,
         budget: store.getBudget(pairing.id),
         scope: identity.scope,
         // Exposed so this side can refuse peer-originated work the peer's own
         // credential does not authorize — e.g. never run a shared command from
-        // a peer whose token no longer carries `commands:run`.
-        peerScope: store.getAgentScope(peerAgentId),
+        // a peer whose token no longer carries `commands:run`. Only populated
+        // in the 2-member case; for 3+ members, look up each member's scope.
+        peerScope: peerAgentId ? store.getAgentScope(peerAgentId) : null,
         revoked: Boolean(identity.revokedAt),
-        peerRevoked: store.isAgentRevoked(peerAgentId),
+        peerRevoked: peerAgentId ? store.isAgentRevoked(peerAgentId) : null,
       },
     });
   });
@@ -100,12 +116,22 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
     res.json({ scope: store.narrowScope(req.inzoAuth!.agentId, scope) });
   });
 
-  // POST /pairings/:id/revoke — the kill switch. Either side can cut either
-  // credential off immediately, without the other party's cooperation.
+  // POST /pairings/:id/revoke — the kill switch. Any member can cut any
+  // other credential off immediately, without that party's cooperation.
+  // target: "self", "peer" (2-member pairings only), "all" (every other
+  // member), or a specific member agentId.
   router.post("/:id/revoke", requireAuth(store), (req, res) => {
     const { target } = req.body ?? {};
-    if (target !== "self" && target !== "peer") {
-      throw badRequest('target must be "self" or "peer"');
+    if (typeof target !== "string" || !target.trim()) {
+      throw badRequest('target must be "self", "peer", "all", or a member agentId');
+    }
+    if (target === "all") {
+      const pairing = store.getPairing(req.params.id);
+      const revocations = pairing.members
+        .filter((agentId) => agentId !== req.inzoAuth!.agentId)
+        .map((agentId) => store.revokeAgent(req.params.id, req.inzoAuth!.agentId, agentId));
+      res.json({ revocations });
+      return;
     }
     res.json({ revocation: store.revokeAgent(req.params.id, req.inzoAuth!.agentId, target) });
   });

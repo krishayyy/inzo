@@ -190,13 +190,20 @@ export interface Budget {
 export interface MinePairing {
   id: string;
   agentId: string;
-  peerAgentId: string;
+  /** Full membership, length >= 2. The source of truth for N-party pairings. */
+  members: string[];
+  approvalPolicy: string;
+  /**
+   * "The other agent" is only well-defined for a 2-member pairing — null for
+   * 3+ members. Use `members` instead once a pairing has grown past 2.
+   */
+  peerAgentId: string | null;
   createdAt: string;
   budget: Budget | null;
   scope: Scope[];
-  peerScope: Scope[];
+  peerScope: Scope[] | null;
   revoked: boolean;
-  peerRevoked: boolean;
+  peerRevoked: boolean | null;
 }
 
 export interface AgentUsage {
@@ -286,8 +293,14 @@ export const relayClient = {
     peerAgentId: string;
     principalId: string | null;
     credential: string | null;
+    members: string[];
   }> {
     return request("POST", `/pairings/${encodeURIComponent(code)}/join`, cnf ? { cnf } : {});
+  },
+
+  /** Mints a fresh one-shot code inviting a 3rd+ member into an EXISTING pairing. */
+  inviteToPairing(pairingId: string, auth: Auth | string): Promise<{ code: string; expiresAt: string }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/invite`, {}, undefined, auth);
   },
 
   getMine(auth: Auth | string): Promise<{ pairing: MinePairing | null }> {

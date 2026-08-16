@@ -80,9 +80,9 @@ Coordination is the feature; the trust boundary is the product.
   stream. Express + SQLite. Runs hosted, or locally for dev.
 - **`packages/mcp-server`** — the MCP server each person adds to their agent
   (Claude Code, Cursor, etc). Exposes `create_pairing_code`, `join_pairing`,
-  `send_message`, `propose_plan`, `approve_plan`, `withdraw_consent`,
-  `get_audit_log`, `set_budget`, `get_runway`, `limit_my_agent`,
-  `revoke_pairing`, and `run_shared_command`.
+  `invite_to_pairing`, `send_message`, `propose_plan`, `approve_plan`,
+  `withdraw_consent`, `get_audit_log`, `set_budget`, `get_runway`,
+  `limit_my_agent`, `revoke_pairing`, and `run_shared_command`.
 - **`packages/cli`** — what the human uses. `inzo watch` for the live view,
   `inzo approve` to sign off on a plan, `inzo withdraw` to take that back,
   `inzo revoke` for the kill switch, `inzo audit` for the tamper-evident log,
@@ -96,8 +96,40 @@ Coordination is the feature; the trust boundary is the product.
 
 ## Quickstart
 
-**1. Both people add the MCP server to their agent.** In Claude Code
-(`.mcp.json`), Cursor, or any MCP client:
+**1. One person pairs, from their project directory:**
+
+```bash
+npx inzo pair
+```
+
+This prints a six-character code, writes `~/.inzo/session.json`, and
+writes (or merges into) `.mcp.json` here so your agent picks up the `inzo`
+MCP server automatically — no hand-editing JSON. Send the code to your
+teammate.
+
+**2. Your teammate joins, from their own project directory:**
+
+```bash
+npx inzo pair <code>
+```
+
+Same effect: session file written, `.mcp.json` wired up. Both of you now have
+an `inzo` MCP server configured for Claude Code, Cursor, or any MCP client —
+prefer to wire it up by hand, or if `.mcp.json` isn't your agent's config
+format (e.g. Codex's `~/.codex/config.toml`), add it yourself:
+
+**Growing past two.** Any current member can invite more teammates into the
+same pairing — a team, not just a pair:
+
+```bash
+npx inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
+```
+
+Each invitee runs `npx inzo pair <code>` exactly as above. Plans require
+every member's approval to lock (unanimous, up to 8 members per pairing) —
+`"peer"` as a revoke/command-origin target only makes sense for the original
+two; for 3+ members, name the specific agentId instead (see `members` in
+`get_pairing_status`).
 
 ```json
 {
@@ -122,21 +154,18 @@ idle-sleep. Both agents must point at the **same relay**, so leave
 `INZO_WORKSPACE` is the only directory a paired agent's commands can ever touch.
 There is no default, on purpose — omit it and `run_shared_command` refuses.
 
-**2. One person pairs.** Ask your agent to call `create_pairing_code`, then send
-the six-character code to your teammate. Their agent calls `join_pairing`.
-
 **3. Both people watch, from their own terminal:**
 
 ```bash
-npx @krishaysuresh/inzo watch
+npx inzo watch
 ```
 
 You will see the agents negotiate live, the plan appear, and a prompt to approve
-it. Nothing locks in until you both run `npx @krishaysuresh/inzo approve`. If the other side's
+it. Nothing locks in until you both run `npx inzo approve`. If the other side's
 agent starts doing something you don't like:
 
 ```bash
-npx @krishaysuresh/inzo revoke peer
+npx inzo revoke peer
 ```
 
 ## Hosting the relay

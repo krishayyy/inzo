@@ -28,6 +28,9 @@ import {
 // Kept in sync with packages/relay-cf/src/registry.ts.
 const PAIRING_CODE_TTL_MS = 30 * 60 * 1000;
 
+/** Bounds join-spam via repeated per-invite codes on one pairing. */
+const MAX_MEMBERS = 8;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS pairing_codes (
   code TEXT PRIMARY KEY,
@@ -55,6 +58,18 @@ CREATE TABLE IF NOT EXISTS pairings (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pairings_code ON pairings(code);
+
+-- Full membership of a pairing. agent_a/agent_b above stay populated for
+-- back-compat (the creator and first joiner) but this table is the source of
+-- truth once a pairing has more than two members.
+CREATE TABLE IF NOT EXISTS pairing_members (
+  pairing_id TEXT NOT NULL REFERENCES pairings(id),
+  agent_id   TEXT NOT NULL,
+  joined_at  TEXT NOT NULL,
+  PRIMARY KEY (pairing_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_members_pairing ON pairing_members(pairing_id);
+CREATE INDEX IF NOT EXISTS idx_pairing_members_agent ON pairing_members(agent_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
@@ -107,11 +122,16 @@ const LATE_COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "plans", column: "version", ddl: "INTEGER NOT NULL DEFAULT 1" },
   { table: "plans", column: "sandbox_id", ddl: "TEXT" },
   { table: "plans", column: "sandbox_state", ddl: "TEXT" },
+  // Set only on an invite code minted by createInviteCode() for an EXISTING
+  // pairing; NULL on the bootstrap code minted by createPairingCode().
+  { table: "pairing_codes", column: "pairing_id", ddl: "TEXT" },
+  { table: "pairings", column: "approval_policy", ddl: "TEXT NOT NULL DEFAULT 'unanimous'" },
 ];
 
 interface PairingCodeRow {
   code: string;
   creator_agent_id: string;
+  pairing_id: string | null;
   created_at: string;
   expires_at: string;
   used_at: string | null;
@@ -122,6 +142,7 @@ interface PairingRow {
   code: string;
   agent_a: string;
   agent_b: string;
+  approval_policy: string;
   created_at: string;
 }
 
@@ -255,8 +276,8 @@ export class RelayStore {
       try {
         this.db
           .prepare(
-            `INSERT INTO pairing_codes (code, creator_agent_id, created_at, expires_at, used_at)
-             VALUES (?, ?, ?, ?, NULL)`,
+            `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at)
+             VALUES (?, ?, NULL, ?, ?, NULL)`,
           )
           .run(code, creatorAgentId, now.toISOString(), expiresAt.toISOString());
         this.db
@@ -296,6 +317,41 @@ export class RelayStore {
     throw new Error("Failed to generate a unique pairing code");
   }
 
+  /**
+   * Invites a 3rd+ member into an EXISTING pairing.
+   *
+   * N-party pairing reuses the same one-shot `pairing_codes` mechanism as the
+   * original 2-party bootstrap — the inviter just loops this once per
+   * teammate rather than the relay minting a reusable multi-use code. Same
+   * TTL, same one-shot semantics, same join route.
+   */
+  createInviteCode(pairingId: string, inviterAgentId: string): PairingCode {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, inviterAgentId);
+    if (pairing.members.length >= MAX_MEMBERS) {
+      throw conflict(`Pairing "${pairingId}" already has the maximum of ${MAX_MEMBERS} members`);
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + PAIRING_CODE_TTL_MS);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = generatePairingCode();
+      try {
+        this.db
+          .prepare(
+            `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at)
+             VALUES (?, ?, ?, ?, ?, NULL)`,
+          )
+          .run(code, inviterAgentId, pairingId, now.toISOString(), expiresAt.toISOString());
+        return this.rowToPairingCode(this.getPairingCodeRow(code)!);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.includes("UNIQUE")) continue;
+        throw err;
+      }
+    }
+    throw new Error("Failed to generate a unique pairing code");
+  }
+
   joinPairing(
     code: string,
     cnf?: { jwk: Jwk },
@@ -320,11 +376,17 @@ export class RelayStore {
       throw gone(`Pairing code "${code}" has expired`);
     }
 
+    if (row.pairing_id) {
+      return this.joinExistingPairing(row.pairing_id, row.code, joinerAgentId, agentToken, scope, cnf);
+    }
+
     const pairing: Pairing = {
       id: generateId("pairing"),
       code,
       agentA: row.creator_agent_id,
       agentB: joinerAgentId,
+      members: [row.creator_agent_id, joinerAgentId],
+      approvalPolicy: "unanimous",
       createdAt: new Date().toISOString(),
     };
 
@@ -340,6 +402,11 @@ export class RelayStore {
            VALUES (?, ?, ?, ?, NULL, ?)`,
         )
         .run(hashAgentToken(agentToken), joinerAgentId, pairing.id, serializeScope(scope), pairing.createdAt);
+      for (const agentId of pairing.members) {
+        this.db
+          .prepare(`INSERT INTO pairing_members (pairing_id, agent_id, joined_at) VALUES (?, ?, ?)`)
+          .run(pairing.id, agentId, pairing.createdAt);
+      }
     });
     tx();
 
@@ -365,6 +432,63 @@ export class RelayStore {
     this.credentials.record(pairing.id, "pairing.joined", actor, assurance, { peerAgentId: pairing.agentA });
 
     return { ...pairing, agentToken, scope, peerAgentId: pairing.agentA, principalId, credential };
+  }
+
+  /** Joining via an invite code minted by createInviteCode() for a pairing that already exists (3rd+ member). */
+  private joinExistingPairing(
+    pairingId: string,
+    code: string,
+    joinerAgentId: string,
+    agentToken: string,
+    scope: Scope[],
+    cnf?: { jwk: Jwk },
+  ): Pairing & { agentToken: string; scope: Scope[]; peerAgentId: string; principalId: string | null; credential: string | null } {
+    const existing = this.getPairing(pairingId);
+    if (existing.members.length >= MAX_MEMBERS) {
+      throw conflict(`Pairing "${pairingId}" already has the maximum of ${MAX_MEMBERS} members`);
+    }
+    const joinedAt = new Date().toISOString();
+
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`UPDATE pairing_codes SET used_at = ? WHERE code = ?`).run(joinedAt, code);
+      this.db
+        .prepare(
+          `INSERT INTO agent_tokens (token_hash, agent_id, pairing_id, scope, revoked_at, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?)`,
+        )
+        .run(hashAgentToken(agentToken), joinerAgentId, pairingId, serializeScope(scope), joinedAt);
+      this.db
+        .prepare(`INSERT INTO pairing_members (pairing_id, agent_id, joined_at) VALUES (?, ?, ?)`)
+        .run(pairingId, joinerAgentId, joinedAt);
+    });
+    tx();
+
+    let principalId: string | null = null;
+    let credential: string | null = null;
+    if (cnf) {
+      principalId = this.credentials.createPrincipal();
+      credential = this.credentials.issueRoot({
+        agentId: joinerAgentId,
+        principalId,
+        pairingId,
+        cap: scope,
+        cnf,
+      }).credential;
+    }
+
+    const actor = { principal: principalId, agent: joinerAgentId, credential: null };
+    const assurance: Assurance = cnf ? "pop" : "bearer";
+    this.credentials.record(pairingId, "pairing.joined", actor, assurance, {
+      code,
+      memberCount: existing.members.length + 1,
+    });
+
+    const pairing = this.getPairing(pairingId);
+    // "peer" is only unambiguous for the original 2-party shape; meaningless
+    // once a 3rd member joins, but kept populated (as the first member) so a
+    // caller that hasn't been updated for N-party gets a value, not a crash.
+    const peerAgentId = pairing.members[0];
+    return { ...pairing, agentToken, scope, peerAgentId, principalId, credential };
   }
 
   /**
@@ -434,14 +558,28 @@ export class RelayStore {
    * Revocation is one-way. There is no un-revoke; re-pair instead. That keeps
    * "revoked" a terminal state an auditor can trust.
    */
+  /**
+   * `target` is "self", "peer" (only unambiguous when the pairing has
+   * exactly 2 members), or a specific member agentId — "all" (every other
+   * member) is a route/tool-layer concern: call this once per member.
+   */
   revokeAgent(
     pairingId: string,
     actorAgentId: string,
-    target: "self" | "peer",
+    target: string,
   ): { revokedAgentId: string; revokedAt: string; by: string; revokedCredentials?: string[] } {
     const pairing = this.getPairing(pairingId);
     this.assertMember(pairing, actorAgentId);
-    const revokedAgentId = target === "self" ? actorAgentId : this.otherAgent(pairing, actorAgentId);
+    let revokedAgentId: string;
+    if (target === "self") {
+      revokedAgentId = actorAgentId;
+    } else if (target === "peer") {
+      revokedAgentId = this.otherAgent(pairing, actorAgentId);
+    } else if (pairing.members.includes(target)) {
+      revokedAgentId = target;
+    } else {
+      throw badRequest(`"${target}" is not a member of pairing "${pairing.id}"`);
+    }
     const revokedAt = new Date().toISOString();
 
     const info = this.db
@@ -485,9 +623,9 @@ export class RelayStore {
    * still unclaimed, which is an expected state rather than an error.
    */
   pairingForAgent(agentId: string): string | null {
-    const row = this.db.prepare(`SELECT id FROM pairings WHERE agent_a = ? OR agent_b = ? LIMIT 1`).get(agentId, agentId) as
-      | { id: string }
-      | undefined;
+    const row = this.db
+      .prepare(`SELECT pairing_id AS id FROM pairing_members WHERE agent_id = ? LIMIT 1`)
+      .get(agentId) as { id: string } | undefined;
     return row?.id ?? null;
   }
 
@@ -499,15 +637,33 @@ export class RelayStore {
     return this.rowToPairing(row);
   }
 
-  /** Throws 403 if the agent is not one of the two agents in the pairing. */
+  /** Full membership of a pairing, in join order. */
+  getMembers(pairingId: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT agent_id FROM pairing_members WHERE pairing_id = ? ORDER BY joined_at ASC`)
+      .all(pairingId) as Array<{ agent_id: string }>;
+    return rows.map((row) => row.agent_id);
+  }
+
+  /** Throws 403 if the agent is not a member of the pairing. */
   assertMember(pairing: Pairing, agentId: string): void {
-    if (agentId !== pairing.agentA && agentId !== pairing.agentB) {
+    if (!pairing.members.includes(agentId)) {
       throw forbidden(`Agent "${agentId}" is not part of pairing "${pairing.id}"`);
     }
   }
 
+  /**
+   * "The other agent" is only well-defined for a 2-member pairing. For 3+
+   * members, callers must pick a specific target from `pairing.members`
+   * instead of asking for "the peer".
+   */
   otherAgent(pairing: Pairing, agentId: string): string {
-    return agentId === pairing.agentA ? pairing.agentB : pairing.agentA;
+    if (pairing.members.length !== 2) {
+      throw badRequest(
+        `"peer" is ambiguous for pairing "${pairing.id}" (${pairing.members.length} members) — specify an agent id`,
+      );
+    }
+    return agentId === pairing.members[0] ? pairing.members[1] : pairing.members[0];
   }
 
   // ---------------------------------------------------------------------
@@ -648,12 +804,12 @@ export class RelayStore {
       });
 
     // A fresh proposal opens a fresh consent record, destroying any prior
-    // approvals (§6.3.4). `required` is both principals and is never editable.
-    const principals = [
-      this.credentials.agentPrincipal(pairing.agentA),
-      this.credentials.agentPrincipal(pairing.agentB),
-    ].filter((entry): entry is string => Boolean(entry));
-    if (principals.length === 2) {
+    // approvals (§6.3.4). `required` is every member's principal (unanimous
+    // policy — see Pairing.approvalPolicy) and is never editable.
+    const principals = pairing.members
+      .map((agentId) => this.credentials.agentPrincipal(agentId))
+      .filter((entry): entry is string => Boolean(entry));
+    if (principals.length === pairing.members.length) {
       this.credentials.openConsent(pairingId, { kind: "plan", version, hash: planSubjectHash(plan) }, principals);
     }
     this.credentials.record(
@@ -698,7 +854,8 @@ export class RelayStore {
 
     const approvedBy = new Set<string>(JSON.parse(row.approved_by));
     approvedBy.add(agentId);
-    const locked = approvedBy.has(pairing.agentA) && approvedBy.has(pairing.agentB);
+    // Unanimous — the only approvalPolicy read today (see Pairing.approvalPolicy).
+    const locked = pairing.members.every((member) => approvedBy.has(member));
     const updatedAt = new Date().toISOString();
 
     // Both approvals landed — the wait this plan opened has resolved. Tear
@@ -889,14 +1046,14 @@ export class RelayStore {
 
   getUsage(pairingId: string): CombinedUsage {
     const pairing = this.getPairing(pairingId);
-    return foldUsage(pairingId, [pairing.agentA, pairing.agentB], this.getUsageReports(pairingId));
+    return foldUsage(pairingId, pairing.members, this.getUsageReports(pairingId));
   }
 
   /** Usage plus the runway derived from it — what agents actually plan against. */
   getUsageSnapshot(pairingId: string, now: number = Date.now()): UsageSnapshot {
     const pairing = this.getPairing(pairingId);
     const reports = this.getUsageReports(pairingId);
-    const usage = foldUsage(pairingId, [pairing.agentA, pairing.agentB], reports);
+    const usage = foldUsage(pairingId, pairing.members, reports);
     const runway = computeRunway(this.getBudget(pairingId), usage, reports, now);
     return { usage, runway };
   }
@@ -975,6 +1132,8 @@ export class RelayStore {
       code: row.code,
       agentA: row.agent_a,
       agentB: row.agent_b,
+      members: this.getMembers(row.id),
+      approvalPolicy: (row.approval_policy as Pairing["approvalPolicy"]) ?? "unanimous",
       createdAt: row.created_at,
     };
   }
