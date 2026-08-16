@@ -894,7 +894,6 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .access h2 { font-size: clamp(42px, 5vw, 64px); }
 .access-mark { display: block; margin: 0 auto 24px; color: var(--ink); }
 .access > p { font-size: 17px; margin: 20px auto 28px; }
-.access-actions { display: flex; gap: 24px; align-items: center; justify-content: center; flex-wrap: wrap; }
 
 /* Screen-reader-only, but still focusable and still announced. */
 .visually-hidden {
