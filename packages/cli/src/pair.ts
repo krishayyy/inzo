@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { generateHolderKeyPair } from "inzo-holder";
 import { createApi } from "./api.js";
-import { panel, style, withSpinner } from "./render.js";
+import { style } from "./render.js";
 import { loadSession, requirePairing, sessionFilePath, type SessionFile } from "./session.js";
 
 /**
@@ -92,10 +92,9 @@ export async function pair(code?: string): Promise<void> {
   const mcpConfigPath = mergeMcpConfig();
 
   if (code) {
-    const joined = await withSpinner(
-      "Joining pairing…",
-      relayPost<JoinPairingResponse>(`/pairings/${encodeURIComponent(code)}/join`, { cnf: { jwk: holder.publicJwk } }),
-    );
+    const joined = await relayPost<JoinPairingResponse>(`/pairings/${encodeURIComponent(code)}/join`, {
+      cnf: { jwk: holder.publicJwk },
+    });
     writeSession({
       pairingId: joined.pairingId,
       agentId: joined.agentId,
@@ -105,15 +104,13 @@ export async function pair(code?: string): Promise<void> {
       holderPrivateKey: joined.credential ? holder.privateKeyPem : null,
       principalId: joined.principalId,
     });
-    process.stdout.write(
-      `${panel("Joined", `Peer agent: ${shortId(joined.peerAgentId)}`, "green")}\n\n` +
-        `Wrote ${sessionFilePath()} and ${mcpConfigPath}.\n` +
-        `Run ${style.bold("inzo watch")} to see the plan negotiate live.\n`,
-    );
+    process.stdout.write(`${style.green("Joined pairing.")} Peer agent: ${joined.peerAgentId}\n`);
+    process.stdout.write(`Wrote ${sessionFilePath()} and ${mcpConfigPath}.\n`);
+    process.stdout.write(`Run ${style.bold("inzo watch")} to see the plan negotiate live.\n`);
     return;
   }
 
-  const created = await withSpinner("Creating a pairing…", relayPost<CreatePairingResponse>("/pairings", { cnf: { jwk: holder.publicJwk } }));
+  const created = await relayPost<CreatePairingResponse>("/pairings", { cnf: { jwk: holder.publicJwk } });
   writeSession({
     pairingId: null,
     agentId: created.agentId,
@@ -123,20 +120,10 @@ export async function pair(code?: string): Promise<void> {
     holderPrivateKey: created.credential ? holder.privateKeyPem : null,
     principalId: created.principalId,
   });
-  // Letter-spaced so it reads clearly at a glance and is easy to dictate over
-  // a call — the same treatment a 2FA code gets, because this fills the same
-  // role: a short-lived secret one person has to hand another correctly.
-  const spaced = created.code.toUpperCase().split("").join(" ");
-  process.stdout.write(
-    `${panel("Pairing code", `${style.bold(spaced)}\n${style.dim(`expires ${new Date(created.expiresAt).toLocaleTimeString()}`)}`, "blue")}\n\n` +
-      `Share it with your teammate — they run: ${style.bold(`inzo pair ${created.code}`)}\n` +
-      `Wrote ${sessionFilePath()} and ${mcpConfigPath}.\n` +
-      `Once they've joined, run ${style.bold("inzo watch")} here.\n`,
-  );
-}
-
-function shortId(agentId: string): string {
-  return agentId.startsWith("agent_") ? agentId.slice(0, 14) : agentId;
+  process.stdout.write(`${style.green("Pairing code:")} ${style.bold(created.code)} (expires ${created.expiresAt})\n`);
+  process.stdout.write(`Share it with your teammate — they run: ${style.bold(`inzo pair ${created.code}`)}\n`);
+  process.stdout.write(`Wrote ${sessionFilePath()} and ${mcpConfigPath}.\n`);
+  process.stdout.write(`Once they've joined, run ${style.bold("inzo watch")} here.\n`);
 }
 
 /**
@@ -151,7 +138,7 @@ export async function invite(count: number): Promise<void> {
   const api = createApi(session);
 
   for (let i = 0; i < count; i++) {
-    const result = await withSpinner(`Creating invite ${i + 1} of ${count}…`, api.invite(pairingId));
+    const result = await api.invite(pairingId);
     process.stdout.write(`${style.green("Invite code:")} ${style.bold(result.code)} (expires ${result.expiresAt})\n`);
   }
   process.stdout.write(`Share each code with a different teammate — they run: ${style.bold("inzo pair <code>")}\n`);

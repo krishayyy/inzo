@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { signConsent } from "inzo-holder";
 import { createApi, type Api, type Message } from "./api.js";
-import { formatMessage, formatPairing, formatPlan, formatRunway, heading, style, withSpinner } from "./render.js";
+import { formatMessage, formatPairing, formatPlan, formatRunway, heading, style } from "./render.js";
 import { loadSession, requirePairing, type SessionFile } from "./session.js";
 import { subscribe } from "./sse.js";
 
@@ -28,17 +28,18 @@ function context(): Ctx {
 
 /** One-shot snapshot: who you are paired with, the plan, and the runway. */
 export async function status(ctx = context()): Promise<void> {
-  const [{ pairing }, { plan }, snapshot] = await withSpinner(
-    "Fetching status…",
-    Promise.all([ctx.api.mine(), ctx.api.plan(ctx.pairingId), ctx.api.usage(ctx.pairingId)]),
-  );
+  const [{ pairing }, { plan }, snapshot] = await Promise.all([
+    ctx.api.mine(),
+    ctx.api.plan(ctx.pairingId),
+    ctx.api.usage(ctx.pairingId),
+  ]);
   if (!pairing) throw new Error("No active pairing.");
 
-  // Each of these is its own titled panel now, so no surrounding heading()
-  // is needed — stacking three boxes reads as a dashboard on its own.
   ctx.out(formatPairing(pairing));
+  ctx.out(heading("Plan"));
   ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId));
-  ctx.out(formatRunway(snapshot.runway, pairing.budget));
+  ctx.out(heading("Runway"));
+  ctx.out(formatRunway(snapshot.runway));
 }
 
 /**
@@ -50,12 +51,12 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
   signal?.addEventListener("abort", () => controller.abort(), { once: true });
   process.once("SIGINT", () => controller.abort());
 
-  const { pairing } = await withSpinner("Connecting…", ctx.api.mine());
+  const { pairing } = await ctx.api.mine();
   if (!pairing) throw new Error("No active pairing.");
 
   // Backfill first so a viewer joining late sees the whole negotiation, not
   // just whatever happens to arrive after they connected.
-  const history = await withSpinner("Loading history…", ctx.api.messages(ctx.pairingId));
+  const history = await ctx.api.messages(ctx.pairingId);
   ctx.out(formatPairing(pairing));
   ctx.out(heading("Thread"));
   for (const message of history.messages) ctx.out(formatMessage(message, ctx.agentId));
@@ -72,7 +73,7 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
           ctx.out(heading("Plan updated"));
           ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId));
           if (plan && !plan.locked && !plan.approvedBy.includes(ctx.agentId)) {
-            ctx.out(style.yellow(`\nRun ${style.bold("inzo approve")} to sign off on v${plan.version}.\n`));
+            ctx.out(style.yellow(`\nRun \`inzo approve\` to sign off on v${plan.version}.\n`));
           }
           break;
         }
@@ -104,10 +105,7 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
  * — so consent is always attached to text a human actually read.
  */
 export async function approve(ctx = context(), confirm = askYesNo): Promise<void> {
-  const [{ pairing }, { plan }] = await withSpinner(
-    "Fetching the current plan…",
-    Promise.all([ctx.api.mine(), ctx.api.plan(ctx.pairingId)]),
-  );
+  const [{ pairing }, { plan }] = await Promise.all([ctx.api.mine(), ctx.api.plan(ctx.pairingId)]);
   if (!pairing) throw new Error("No active pairing.");
   if (!plan) throw new Error("No plan has been proposed yet — nothing to approve.");
   if (plan.locked) {
@@ -143,7 +141,7 @@ export async function approve(ctx = context(), confirm = askYesNo): Promise<void
     version: plan.version,
   });
 
-  const result = await withSpinner("Submitting your approval…", ctx.api.approve(ctx.pairingId, plan.version, signature));
+  const result = await ctx.api.approve(ctx.pairingId, plan.version, signature);
   ctx.out(
     result.plan.locked
       ? style.green("Both sides approved. The plan is locked in.")
@@ -177,7 +175,7 @@ export async function withdraw(ctx = context()): Promise<void> {
 export async function audit(args: string[], ctx = context()): Promise<void> {
   const flags = parseFlags(args);
   const since = flags.since ? Number(flags.since) : undefined;
-  const { records, chainValid, brokenAt, issuer } = await withSpinner("Fetching the audit log…", ctx.api.audit(ctx.pairingId, since));
+  const { records, chainValid, brokenAt, issuer } = await ctx.api.audit(ctx.pairingId, since);
 
   ctx.out(heading(`Audit log — ${records.length} record${records.length === 1 ? "" : "s"} · ${issuer}`));
   for (const record of records) {
@@ -205,7 +203,7 @@ export async function revoke(
     ctx.out(style.dim("Cancelled. Nothing was revoked."));
     return;
   }
-  const { revocation } = await withSpinner("Revoking…", ctx.api.revoke(ctx.pairingId, target));
+  const { revocation } = await ctx.api.revoke(ctx.pairingId, target);
   ctx.out(style.red(`Revoked ${subject} at ${revocation.revokedAt}.`));
 }
 
