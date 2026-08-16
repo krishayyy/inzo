@@ -203,11 +203,115 @@ const waitlist = document.querySelector(".waitlist");
 if (waitlist) {
   const status = waitlist.querySelector(".waitlist-status");
   const submit = waitlist.querySelector("button[type='submit']");
+  const email = waitlist.querySelector("#waitlist-email");
+
+  /* Set here rather than in the markup: with JS off, the browser's own
+     `required` / `type=email` checks are the only thing standing between a
+     typo and a dead row, and they stay on. With JS on we take over, because
+     a message under the field beats a bubble that vanishes on the next click
+     and is invisible to a screen reader that isn't focused there. */
+  waitlist.noValidate = true;
+
+  /* Syntax only. Nothing here can tell you a real mailbox is behind the
+     address — that takes a confirmation email — so the goal is narrow: catch
+     the honest slips (a stray space, a missing dot, a half-typed domain)
+     before they become a dead row in the dashboard, and never reject an
+     address that might be real. */
+  const EMAIL = /^[^\s@,;:<>()[\]\\"]+@[^\s@.]+(\.[^\s@.]+)+$/;
+
+  /* Typos in the five domains that cover most signups. Suggest, never
+     correct: someone really might own an address at a lookalike domain. */
+  const COMMON = ["gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com"];
+
+  /* One substitution, insertion, deletion, or transposition away. */
+  const isNearMiss = (a, b) => {
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0;
+    let j = 0;
+    let edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) {
+        i += 1;
+        j += 1;
+        continue;
+      }
+      if (++edits > 1) return false;
+      if (a[i + 1] === b[j] && a[i] === b[j + 1]) {
+        i += 2;
+        j += 2;
+      } else if (a.length > b.length) i += 1;
+      else if (a.length < b.length) j += 1;
+      else {
+        i += 1;
+        j += 1;
+      }
+    }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  };
+
+  const problemWith = (value) => {
+    if (!value) return "Enter your email address so we know where to write.";
+    if (/\s/.test(value)) return "That address has a space in it — check for a typo.";
+    if (!value.includes("@")) return "That's missing an @ — try you@company.com.";
+    if (!EMAIL.test(value)) return "That doesn't look like a complete address — try you@company.com.";
+    /* The local part is capped at 64 octets by RFC 5321; the whole address at 254. */
+    if (value.split("@")[0].length > 64) return "That address is longer than email allows.";
+    return null;
+  };
+
+  const suggestionFor = (value) => {
+    const domain = value.split("@")[1]?.toLowerCase();
+    if (!domain || COMMON.includes(domain)) return null;
+    return COMMON.find((known) => isNearMiss(domain, known)) ?? null;
+  };
+
+  const showProblem = (message) => {
+    status.dataset.state = "error";
+    status.textContent = message;
+    email.setAttribute("aria-invalid", "true");
+    email.focus();
+  };
+
+  const clearProblem = () => {
+    email.removeAttribute("aria-invalid");
+    if (status.dataset.state === "error") {
+      status.dataset.state = "";
+      status.textContent = "";
+    }
+  };
+
+  /* Complain on the way out of the field, not on every keystroke — nobody
+     wants to be told their address is wrong while they're still typing it. */
+  email.addEventListener("input", clearProblem);
+  email.addEventListener("blur", () => {
+    const value = email.value.trim();
+    if (!value) return;
+    const problem = problemWith(value);
+    if (problem) showProblem(problem);
+  });
 
   waitlist.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!waitlist.reportValidity()) return;
 
+    /* Trailing whitespace from a copy-paste is the single most common way a
+       good address arrives broken, and it is ours to fix, not theirs. */
+    email.value = email.value.trim();
+
+    const problem = problemWith(email.value);
+    if (problem) {
+      showProblem(problem);
+      return;
+    }
+
+    const suggestion = suggestionFor(email.value);
+    if (suggestion && email.dataset.confirmed !== email.value) {
+      /* Second press of the same button sends it as typed. */
+      email.dataset.confirmed = email.value;
+      showProblem(`Did you mean @${suggestion}? Press again to send it as typed.`);
+      return;
+    }
+
+    clearProblem();
     submit.disabled = true;
     status.dataset.state = "";
     status.textContent = "Sending…";
