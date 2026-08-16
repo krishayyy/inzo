@@ -371,7 +371,7 @@ if (waitlist) {
     } catch {
       submit.disabled = false;
       status.dataset.state = "error";
-      status.textContent = "That didn't send. Email hello@inzo.dev and we'll add you by hand.";
+      status.textContent = "That didn't send. Email inzodev.official@gmail.com and we'll add you by hand.";
     }
   });
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { approve, audit, budget, revoke, status, watch, withdraw } from "./commands.js";
 import { invite, pair } from "./pair.js";
 import { sessionFilePath } from "./session.js";
@@ -6,6 +7,8 @@ import { style } from "./render.js";
 
 const USAGE = `inzo — pair, watch, and control an agent pairing
 
+  inzo                       open the shell (cowork / acquaintance)
+  inzo shell                 the same, explicitly
   inzo pair                  create a pairing code and wire up .mcp.json here
   inzo pair <code>           join a pairing code a teammate shared with you
   inzo pair --invite <n>     invite <n> more teammates into your active pairing
@@ -39,6 +42,12 @@ async function main(argv: string[]): Promise<number> {
       await pair(rest[0]);
       return 0;
     }
+    case "shell": {
+      // Imported lazily so the one-shot commands never pay for loading Ink.
+      const { startShell } = await import("./shell/start.js");
+      await startShell();
+      return 0;
+    }
     case "watch":
       await watch();
       return 0;
@@ -65,10 +74,20 @@ async function main(argv: string[]): Promise<number> {
     case "budget":
       await budget(rest);
       return 0;
+    case undefined: {
+      // Bare `inzo` opens the shell once you are paired, and prints usage
+      // otherwise — nobody's first run should drop them into an empty TUI.
+      if (existsSync(sessionFilePath()) && process.stdout.isTTY) {
+        const { startShell } = await import("./shell/start.js");
+        await startShell();
+        return 0;
+      }
+      process.stdout.write(USAGE);
+      return 0;
+    }
     case "help":
     case "--help":
     case "-h":
-    case undefined:
       process.stdout.write(USAGE);
       return 0;
     default:

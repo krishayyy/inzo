@@ -20,6 +20,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/react": "^18.3.31",
+    "ink-testing-library": "^4.0.0",
     "inzo-relay": "*",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
@@ -49,6 +51,8 @@
     "agent-coordination"
   ],
   "dependencies": {
-    "inzo-holder": "*"
+    "ink": "^5.2.1",
+    "inzo-holder": "*",
+    "react": "^18.3.1"
   }
 }
