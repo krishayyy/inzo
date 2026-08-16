@@ -335,11 +335,36 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   display: flex;
   gap: 26px;
   align-items: center;
-  flex-wrap: wrap;
   color: var(--muted);
   font-size: 13px;
 }
+.logos span { flex-shrink: 0; }
 .logos b { color: var(--ink); font-size: 14px; }
+
+.marquee {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.marquee-track {
+  display: flex;
+  gap: 26px;
+  width: max-content;
+  animation: marquee-scroll 18s linear infinite;
+}
+.marquee:hover .marquee-track,
+.marquee:focus-within .marquee-track { animation-play-state: paused; }
+
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track { animation: none; }
+}
 
 /* --- statement + features --------------------------------------------- */
 
