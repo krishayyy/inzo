@@ -78,6 +78,51 @@ play.addEventListener("click", () => {
   window.setTimeout(run, reducedMotion.matches ? 0 : 500);
 });
 
+// Scroll reveal: below-the-fold blocks fade + rise into view once, staggered
+// within their group (feature cards, trust rows, runway tiles, quickstart
+// steps). Skipped under reduced motion — those elements are just shown
+// immediately, both here and via the CSS media-query fallback for no-JS.
+const revealEls = document.querySelectorAll(".reveal");
+if (reducedMotion.matches) {
+  revealEls.forEach((el) => el.classList.add("in-view"));
+} else {
+  revealEls.forEach((el) => {
+    const group = el.closest("[data-reveal-group]");
+    const siblings = group ? Array.from(group.querySelectorAll(".reveal")) : [el];
+    const index = siblings.indexOf(el);
+    el.style.transitionDelay = `${Math.min(index, 5) * 80}ms`;
+  });
+  const revealObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("in-view");
+        revealObserver.unobserve(entry.target);
+      });
+    },
+    { threshold: 0.15, rootMargin: "0px 0px -60px 0px" },
+  );
+  revealEls.forEach((el) => revealObserver.observe(el));
+
+  // Safety net: content must never stay invisible. If IntersectionObserver
+  // is unavailable, misbehaves, or a browser quirk stops it from firing for
+  // an element already on screen, force everything visible after a beat.
+  window.setTimeout(() => {
+    revealObserver.disconnect();
+    revealEls.forEach((el) => el.classList.add("in-view"));
+  }, 2500);
+}
+
+// Spotlight-on-hover for the feature cards: a soft radial glow that tracks
+// the pointer, driven by CSS custom properties set on pointermove.
+document.querySelectorAll(".features article").forEach((card) => {
+  card.addEventListener("pointermove", (e) => {
+    const rect = card.getBoundingClientRect();
+    card.style.setProperty("--x", `${e.clientX - rect.left}px`);
+    card.style.setProperty("--y", `${e.clientY - rect.top}px`);
+  });
+});
+
 const copyQuickstart = document.querySelector("#copy-quickstart");
 if (copyQuickstart) {
   const fullQuickstart = Array.from(document.querySelectorAll(".code-block code"))

@@ -13,6 +13,7 @@
 <meta property="og:title" content="Inzo — coordinate the build.">
 <meta property="og:description" content="Pair two coding agents. Watch them negotiate. Approve the plan. Every action carries a credential anyone can verify.">
 <meta property="og:type" content="website">
+<noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>
 </head>
 <body>
 
@@ -102,12 +103,12 @@
     </section>
   </section>
 
-  <section class="logos">
+  <section class="logos reveal">
     <span>One place for the agents your team already uses</span>
     <b>Claude Code</b><b>Cursor</b><b>Codex</b><b>MCP</b>
   </section>
 
-  <section class="statement" id="product">
+  <section class="statement reveal" id="product">
     <p class="label">THE NEW BUILD TABLE</p>
     <h2>Coordination is the feature.<br>The <em>trust boundary</em> is the product.</h2>
     <p class="intro">Letting two agents talk to each other is easy. Letting them talk to each
@@ -116,20 +117,20 @@
     building. That is what Inzo is.</p>
   </section>
 
-  <section class="features">
-    <article>
+  <section class="features" data-reveal-group>
+    <article class="reveal">
       <span class="feature-icon blue" aria-hidden="true">↗</span>
       <h3>Pair with intent</h3>
       <p>One short code pairs exactly two agents. Nothing is open by default, and the
       pairing is the only thing that authorizes them to speak.</p>
     </article>
-    <article>
+    <article class="reveal">
       <span class="feature-icon green" aria-hidden="true">⌁</span>
       <h3>Watch the thinking</h3>
       <p>The negotiation and task split stream to both humans live, as they happen —
       not summarized afterward.</p>
     </article>
-    <article>
+    <article class="reveal">
       <span class="feature-icon orange" aria-hidden="true">✓</span>
       <h3>Keep the final say</h3>
       <p>A plan locks only when both humans approve the same version. Re-proposing
@@ -138,15 +139,15 @@
   </section>
 
   <section class="trust" id="trust">
-    <div>
+    <div class="reveal">
       <p class="label">THE TRUST BOUNDARY</p>
       <h2>Don't take our word for it.</h2>
       <p>Most agent tools ask you to trust a relay. Inzo is built so you don't have to —
       every guarantee below is one your teammate's organization can check independently,
       without asking us and without a prior agreement between you.</p>
     </div>
-    <div class="trust-list">
-      <article>
+    <div class="trust-list" data-reveal-group>
+      <article class="reveal">
         <b aria-hidden="true">01</b>
         <div>
           <h3>Identity is derived, never asserted</h3>
@@ -155,7 +156,7 @@
           is rejected outright, not quietly ignored.</p>
         </div>
       </article>
-      <article>
+      <article class="reveal">
         <b aria-hidden="true">02</b>
         <div>
           <h3>A stolen credential is inert</h3>
@@ -164,7 +165,7 @@
           credential can't be replayed, and a plan can't be altered in flight.</p>
         </div>
       </article>
-      <article>
+      <article class="reveal">
         <b aria-hidden="true">03</b>
         <div>
           <h3>Authority only narrows</h3>
@@ -173,7 +174,7 @@
           your agent cannot approve on your behalf, however it gets prompted.</p>
         </div>
       </article>
-      <article>
+      <article class="reveal">
         <b aria-hidden="true">04</b>
         <div>
           <h3>Consent is a signature, not a row</h3>
@@ -182,7 +183,7 @@
           verification — and anyone can run that check.</p>
         </div>
       </article>
-      <article>
+      <article class="reveal">
         <b aria-hidden="true">05</b>
         <div>
           <h3>A kill switch that actually works</h3>
@@ -191,7 +192,7 @@
           closes open streams, and withdraws consent given with that credential.</p>
         </div>
       </article>
-      <article>
+      <article class="reveal">
         <b aria-hidden="true">06</b>
         <div>
           <h3>Execution is sandboxed, always</h3>
@@ -204,29 +205,29 @@
   </section>
 
   <section class="runway" id="runway">
-    <div class="runway-copy">
+    <div class="runway-copy reveal">
       <p class="label">RUNWAY</p>
       <h2>Know when you run dry.</h2>
       <p>Token burn, spend, and elapsed time become one number that matters: how long you
       can keep going at the current rate, and whether that lands before your deadline.
       Budget pressure should be a clear choice, not background anxiety.</p>
     </div>
-    <dl class="runway-stats">
-      <div><dt>Tokens left</dt><dd>84k</dd></div>
-      <div><dt>Burn rate</dt><dd>12k/hr</dd></div>
-      <div><dt>Dry at</dt><dd>17:20</dd></div>
-      <div><dt>Deadline</dt><dd class="ok">18:00 ✓</dd></div>
+    <dl class="runway-stats" data-reveal-group>
+      <div class="reveal"><dt>Tokens left</dt><dd>84k</dd></div>
+      <div class="reveal"><dt>Burn rate</dt><dd>12k/hr</dd></div>
+      <div class="reveal"><dt>Dry at</dt><dd>17:20</dd></div>
+      <div class="reveal"><dt>Deadline</dt><dd class="ok">18:00 ✓</dd></div>
     </dl>
   </section>
 
-  <section class="quickstart" id="quickstart">
+  <section class="quickstart reveal" id="quickstart">
     <p class="label">QUICKSTART</p>
     <h2>Two terminals. Same code.</h2>
     <p>No account, no install step beyond your agent's own config. Both people run this —
     the hosted relay is free to try, with no setup on your side.</p>
 
-    <div class="qs-grid">
-      <div class="qs-step">
+    <div class="qs-grid" data-reveal-group>
+      <div class="qs-step reveal">
         <p class="qs-step-label">1 &middot; each person adds Inzo to their agent</p>
         <pre class="code-block" tabindex="0"><code>{
   "mcpServers": {
@@ -238,7 +239,7 @@
   }
 }</code></pre>
       </div>
-      <div class="qs-step">
+      <div class="qs-step reveal">
         <p class="qs-step-label">2 &middot; one person pairs, then both watch live</p>
         <pre class="code-block" tabindex="0"><code>npx inzo-cli watch</code></pre>
         <p class="qs-step-label">3 &middot; approve the plan you both read</p>
@@ -248,7 +249,7 @@
     <button class="link-button" id="copy-quickstart" type="button">Copy full quickstart <b aria-hidden="true">⧉</b></button>
   </section>
 
-  <section class="access" id="access">
+  <section class="access reveal" id="access">
     <img class="access-mark" src="brand/inzo-mark-accent.svg" alt="" width="52" height="52">
     <p class="label">INZO EARLY BUILD</p>
     <h2>The next great build<br>should feel <em>shared.</em></h2>

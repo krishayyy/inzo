@@ -14,6 +14,7 @@
   --soft: #f2f5f9;
   --dark-muted: #b9c3d1;   /* 9.19:1 on --ink — AAA */
   --focus: #1f5ce0;
+  --ease: cubic-bezier(.22, 1, .36, 1);
 }
 
 * { box-sizing: border-box; }
@@ -72,7 +73,20 @@ header {
 
 nav { display: flex; gap: 28px; margin-left: auto; margin-right: 8px; }
 nav a, footer a { font-size: 14px; color: var(--muted); text-decoration: none; }
-nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
+nav a { position: relative; transition: color .25s var(--ease); }
+nav a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 100%;
+  bottom: -4px;
+  height: 1.5px;
+  background: currentColor;
+  transition: right .3s var(--ease);
+}
+nav a:hover { color: var(--ink); }
+nav a:hover::after { right: 0; }
+footer a:hover { color: var(--ink); text-decoration: underline; }
 
 .button {
   display: inline-flex;
@@ -88,12 +102,19 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   font-size: 14px;
   cursor: pointer;
   white-space: nowrap;
-  transition: transform .2s, background .2s;
+  box-shadow: 0 1px 2px rgba(24, 32, 45, .08);
+  transition: transform .4s var(--ease), background .4s var(--ease), box-shadow .4s var(--ease);
 }
-.button:hover { transform: translateY(-2px); background: var(--blue); }
+.button:hover {
+  transform: translateY(-2px);
+  background: var(--blue);
+  box-shadow: 0 14px 28px -10px rgba(31, 92, 224, .5);
+}
+.button:active { transform: translateY(0) scale(.97); box-shadow: 0 1px 2px rgba(24, 32, 45, .08); }
 .button-small { padding: 10px 14px; }
 
 .link-button {
+  position: relative;
   border: 0;
   background: none;
   color: var(--ink);
@@ -101,8 +122,21 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   font-weight: 700;
   text-decoration: none;
   cursor: pointer;
+  transition: color .3s var(--ease);
+}
+.link-button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 100%;
+  bottom: -3px;
+  height: 1.5px;
+  background: var(--blue);
+  transition: right .35s var(--ease);
 }
 .link-button:hover { color: var(--blue); }
+.link-button:hover::after { right: 0; }
+.link-button:active { transform: scale(.97); }
 .link-button b { color: var(--blue); font-size: 20px; }
 
 /* --- hero ------------------------------------------------------------- */
@@ -180,12 +214,15 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: 0 14px 32px rgba(22, 38, 63, .11);
+  box-shadow: 0 24px 48px -16px rgba(31, 92, 224, .18), 0 8px 20px -8px rgba(22, 38, 63, .12);
   overflow: hidden;
   transform: rotate(1.5deg);
-  transition: transform .3s;
+  transition: transform .5s var(--ease), box-shadow .5s var(--ease);
 }
-.demo:hover, .demo:focus-within { transform: rotate(0); }
+.demo:hover, .demo:focus-within {
+  transform: rotate(0);
+  box-shadow: 0 32px 64px -16px rgba(31, 92, 224, .22), 0 12px 28px -8px rgba(22, 38, 63, .14);
+}
 
 .demo-bar, .demo-footer {
   min-height: 42px;
@@ -312,7 +349,10 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
+  transition: transform .25s var(--ease), background .25s var(--ease), opacity .25s var(--ease);
 }
+.proposal button:not(:disabled):hover { transform: translateY(-1px); }
+.proposal button:not(:disabled):active { transform: translateY(0) scale(.95); }
 /* Locked state is signalled by border, background AND the ✓ glyph in the
    status text — never by colour alone. */
 .proposal.locked { border-color: var(--green); background: #f1fbf2; }
@@ -339,7 +379,8 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   color: var(--muted);
   font-size: 13px;
 }
-.logos b { color: var(--ink); font-size: 14px; }
+.logos b { color: var(--ink); font-size: 14px; transition: color .25s var(--ease); cursor: default; }
+.logos b:hover { color: var(--blue); }
 
 /* --- statement + features --------------------------------------------- */
 
@@ -354,11 +395,30 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   padding-bottom: 130px;
 }
 .features article {
+  position: relative;
+  overflow: hidden;
   padding: 26px;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: #fff;
+  transition: transform .4s var(--ease), border-color .4s var(--ease), box-shadow .4s var(--ease);
 }
+.features article::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(280px circle at var(--x, 50%) var(--y, 0%), rgba(31, 92, 224, .09), transparent 70%);
+  opacity: 0;
+  transition: opacity .4s var(--ease);
+  pointer-events: none;
+}
+.features article > * { position: relative; z-index: 1; }
+.features article:hover {
+  transform: translateY(-4px);
+  border-color: #c7d4e8;
+  box-shadow: 0 20px 40px -22px rgba(22, 38, 63, .28);
+}
+.features article:hover::before { opacity: 1; }
 .feature-icon {
   display: flex;
   width: 36px;
@@ -397,8 +457,15 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   gap: 18px;
   padding: 20px 0;
   border-top: 1px solid #364150;
+  border-radius: 10px;
+  transition: background .35s var(--ease), padding-left .35s var(--ease), margin-left .35s var(--ease);
 }
 .trust-list article:first-child { border-top: 0; padding-top: 0; }
+.trust-list article:hover {
+  background: rgba(255, 255, 255, .035);
+  padding-left: 12px;
+  margin-left: -12px;
+}
 .trust-list article b { color: #ff8a6b; font-size: 12px; padding-top: 4px; }
 .trust-list h3 { margin: 0 0 6px; }
 .trust-list p { color: var(--dark-muted); font-size: 14px; margin: 0; }
@@ -432,7 +499,12 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   border-radius: 14px;
   overflow: hidden;
 }
-.runway-stats > div { background: #fff; padding: 28px 26px; }
+.runway-stats > div {
+  background: #fff;
+  padding: 28px 26px;
+  transition: background .35s var(--ease);
+}
+.runway-stats > div:hover { background: var(--soft); }
 .runway-stats dt {
   font-size: 11px;
   font-weight: 800;
@@ -478,12 +550,18 @@ nav a:hover, footer a:hover { color: var(--ink); text-decoration: underline; }
   padding: 16px 18px;
   background: var(--ink);
   color: #d7e0ee;
+  border: 1px solid transparent;
   border-radius: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   line-height: 1.6;
   overflow-x: auto;
   white-space: pre;
+  transition: border-color .35s var(--ease), box-shadow .35s var(--ease);
+}
+.code-block:hover, .code-block:focus-within {
+  border-color: #33415a;
+  box-shadow: 0 12px 28px -16px rgba(0, 0, 0, .4);
 }
 .code-block code { background: none; padding: 0; }
 
@@ -544,6 +622,19 @@ footer div { display: flex; gap: 20px; }
   .proof { align-items: flex-start; }
 }
 
+/* --- scroll reveal ------------------------------------------------------
+   Below-the-fold content only — the hero and demo stay immediately visible
+   so there is never a load-time flash of hidden content. Progressively
+   enhanced: no-JS visitors get the <noscript> override in <head>, and
+   reduced-motion visitors get the override below. */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity .7s var(--ease), transform .7s var(--ease);
+}
+.reveal.in-view { opacity: 1; transform: translateY(0); }
+
 /* --- motion ----------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -555,4 +646,5 @@ footer div { display: flex; gap: 20px; }
   }
   .demo { transform: none; }
   .button:hover { transform: none; }
+  .reveal { opacity: 1; transform: none; }
 }
