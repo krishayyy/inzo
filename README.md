@@ -99,7 +99,7 @@ Coordination is the feature; the trust boundary is the product.
 **1. One person pairs, from their project directory:**
 
 ```bash
-npx inzo pair
+npx @krishaysuresh/inzo pair
 ```
 
 This prints a six-character code, writes `~/.inzo/session.json`, and
@@ -110,7 +110,7 @@ teammate.
 **2. Your teammate joins, from their own project directory:**
 
 ```bash
-npx inzo pair <code>
+npx @krishaysuresh/inzo pair <code>
 ```
 
 Same effect: session file written, `.mcp.json` wired up. Both of you now have
@@ -145,10 +145,10 @@ There is no default, on purpose — omit it and `run_shared_command` refuses.
 same pairing — a team, not just a pair:
 
 ```bash
-npx inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
+npx @krishaysuresh/inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
 ```
 
-Each invitee runs `npx inzo pair <code>` exactly as above. Plans require
+Each invitee runs `npx @krishaysuresh/inzo pair <code>` exactly as above. Plans require
 every member's approval to lock (unanimous, up to 8 members per pairing) —
 `"peer"` as a revoke/command-origin target only makes sense for the original
 two; for 3+ members, name the specific agentId instead (see `members` in
@@ -157,15 +157,15 @@ two; for 3+ members, name the specific agentId instead (see `members` in
 **3. Everyone watches, from their own terminal:**
 
 ```bash
-npx inzo watch
+npx @krishaysuresh/inzo watch
 ```
 
 You will see the agents negotiate live, the plan appear, and a prompt to approve
-it. Nothing locks in until you both run `npx inzo approve`. If the other side's
+it. Nothing locks in until you both run `npx @krishaysuresh/inzo approve`. If the other side's
 agent starts doing something you don't like:
 
 ```bash
-npx inzo revoke peer
+npx @krishaysuresh/inzo revoke peer
 ```
 
 ## Hosting the relay
