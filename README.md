@@ -83,10 +83,11 @@ Coordination is the feature; the trust boundary is the product.
   `invite_to_pairing`, `send_message`, `propose_plan`, `approve_plan`,
   `withdraw_consent`, `get_audit_log`, `set_budget`, `get_runway`,
   `limit_my_agent`, `revoke_pairing`, and `run_shared_command`.
-- **`packages/cli`** — what the human uses. `inzo watch` for the live view,
-  `inzo approve` to sign off on a plan, `inzo withdraw` to take that back,
-  `inzo revoke` for the kill switch, `inzo audit` for the tamper-evident log,
-  plus `inzo status` and `inzo budget`.
+- **`packages/cli`** — what the human uses. Bare `inzo` opens the interactive
+  shell (below); the one-shot commands all still work — `inzo watch` for the
+  line-by-line live view, `inzo approve` to sign off on a plan, `inzo withdraw`
+  to take that back, `inzo revoke` for the kill switch, `inzo audit` for the
+  tamper-evident log, plus `inzo status` and `inzo budget`.
 - **`packages/sandbox`** — the Docker isolation every shared command runs inside.
 - **`packages/holder`** — the client half of the trust model: holder keys,
   request proofs, and consent signatures. Shared by the MCP server and the CLI
@@ -167,6 +168,64 @@ agent starts doing something you don't like:
 ```bash
 npx inzo-cli revoke peer
 ```
+
+## The shell
+
+Bare `inzo` opens an interactive shell over the same pairing: a live thread, the
+plan, presence, and a slash-command prompt. Your agent keeps doing the coding
+through the MCP server — the shell is a control surface, so it needs no API key
+and runs alongside whatever agent you already use.
+
+```bash
+npx inzo-cli            # or: npx inzo-cli shell
+```
+
+Anything you type that does not start with `/` goes to the thread. `/help` lists
+the commands available in the current mode.
+
+### cowork — same repo, full trust
+
+`/claim src/**` tells everyone which files you are touching, and every member's
+claims show in the presence pane. Editing a file inside someone else's claim
+raises a collision warning before the conflict exists. `/who` lists holders,
+`/release` drops your claims, `/handoff` syncs and hands them back.
+
+Git coordination rides the thread — inzo shares *that* you pushed `abc123` to
+`inzo/<you>` touching these files, never the code itself, so it works with any
+remote and any host. **shift+tab** cycles the git mode, shown in the status bar:
+
+| Mode | Behaviour |
+|---|---|
+| `manual` | Nothing automatic. inzo shows divergence and collisions; you drive git. |
+| `plan` | Fetch only. `PLAN.md` is the work surface; no commits, no pushes. |
+| `auto-sync` | Debounced fetch+rebase and auto-commit of *your claimed files* to *your own* branch `inzo/<you>`. |
+| `auto` | As above, plus push, plus merge of peer branches whose files miss your claims. |
+
+In every mode: never force-push, never push to `main`/`master`, never touch a
+branch that isn't yours, never commit while a rebase or merge is in progress.
+
+`PLAN.md` in the repo root is a *view* of the relay plan, re-rendered whenever
+the plan changes. Edit it freely with your agent and `/propose` publishes it as a
+new version — which resets both approvals, because consent binds a signature to
+the exact text that was approved.
+
+### acquaintance — separate codebases, scoped trust
+
+For pairing with someone you do not want reading your repo. `/mode acquaintance`
+mints a *child* credential holding only `messages:read` and `messages:send`, and
+every request runs under it. No `commands:run`, so a peer command cannot execute;
+no `plan:approve`, so nothing can be signed on your behalf. That boundary is in
+the credential, not in this UI — anyone can verify it offline against the
+published JWKS.
+
+The parent credential stays in `session.json`, so the mode is reversible with
+`/mode cowork`. `/claim`, `/sync` and the git engine are simply absent from the
+registry while it holds, and outbound is default-deny: nothing leaves except what
+you hand to `/say`, `/share <label> <value>` or `/ask <question>`.
+
+Worth stating plainly: acquaintance governs *your* outbound discipline and *your*
+agent's authority. It does not constrain what the peer does on their side — that
+is their credential, and `inzo status` already shows what theirs carries.
 
 ## Hosting the relay
 

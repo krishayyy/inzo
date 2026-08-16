@@ -8,6 +8,7 @@ import { createApi } from "../api.js";
 import { approve, revoke, status, watch, type Ctx } from "../commands.js";
 import { buildAuthHeaders, generateHolderKeyPair } from "inzo-holder";
 import { loadSession } from "../session.js";
+import { ACQUAINTANCE_CAP } from "../modes.js";
 
 let server: Server;
 let store: import("inzo-relay").RelayStore;
@@ -275,6 +276,60 @@ describe("watch", () => {
     await running;
     expect(text()).toMatch(/YOUR agent was revoked by the peer/);
   }, 10_000);
+});
+
+describe("acquaintance mode", () => {
+  it("runs under a child credential the relay itself holds to the narrower scope", async () => {
+    const { creator, joiner, pairingId } = await pair();
+    const parent = ctxFor(creator, pairingId).ctx.api;
+
+    const issued = await parent.attenuate(ACQUAINTANCE_CAP);
+    expect(issued.cap.sort()).toEqual([...ACQUAINTANCE_CAP].sort());
+    expect(issued.cap).not.toContain("commands:run");
+    expect(issued.cap).not.toContain("plan:approve");
+    expect(issued.depth).toBeGreaterThan(0);
+
+    const child = createApi({
+      relayUrl: base,
+      pairingId,
+      agentId: creator.agentId,
+      agentToken: creator.agentToken,
+      credential: issued.credential,
+      holderPrivateKey: creator.holderPrivateKey,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // The funnel still works…
+    await expect(child.sendMessage(pairingId, "progress: benchmarks are green")).resolves.toBeTruthy();
+    await expect(child.messages(pairingId)).resolves.toBeTruthy();
+
+    // …but the relay, not the UI, is what refuses everything else.
+    await expect(child.proposePlan(pairingId, "cross the boundary", [{ owner: "x", task: "y" }])).rejects.toMatchObject({
+      status: 403,
+    });
+    await proposePlan(joiner, pairingId, "peer's plan");
+    await expect(child.approve(pairingId, 1)).rejects.toMatchObject({ status: 403 });
+
+    // Reversible: the parent in session.json is untouched, so cowork still works.
+    await expect(parent.plan(pairingId)).resolves.toBeTruthy();
+  });
+
+  it("cannot widen its own capabilities", async () => {
+    const { creator, pairingId } = await pair();
+    const parent = ctxFor(creator, pairingId).ctx.api;
+    const issued = await parent.attenuate(ACQUAINTANCE_CAP);
+    const child = createApi({
+      relayUrl: base,
+      pairingId,
+      agentId: creator.agentId,
+      agentToken: creator.agentToken,
+      credential: issued.credential,
+      holderPrivateKey: creator.holderPrivateKey,
+      updatedAt: new Date().toISOString(),
+    });
+
+    await expect(child.attenuate(["messages:read", "commands:run"])).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 describe("status", () => {

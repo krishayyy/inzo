@@ -1,4 +1,4 @@
-import { buildAuthHeaders } from "inzo-holder";
+import { buildAuthHeaders, publicJwkFromPem } from "inzo-holder";
 import type { SessionFile } from "./session.js";
 
 export interface ConsentRecord {
@@ -26,9 +26,20 @@ export interface Message {
   cursor: number;
 }
 
+export type ItemStatus = "pending" | "in_progress" | "done";
+
+export interface PlanItem {
+  owner: string;
+  task: string;
+  /** Indices of earlier items that must be `done` first. */
+  dependsOn?: number[];
+  /** Present only on relays that track per-item progress. */
+  status?: ItemStatus;
+}
+
 export interface Plan {
   goal: string;
-  items: Array<{ owner: string; task: string }>;
+  items: PlanItem[];
   proposedBy: string;
   approvedBy: string[];
   locked: boolean;
@@ -145,6 +156,37 @@ export function createApi(session: SessionFile) {
         "GET",
         `/pairings/${pairingId}/audit${since ? `?since=${since}` : ""}`,
       ),
+    sendMessage: (pairingId: string, body: string) =>
+      call<{ message: Message }>("POST", `/pairings/${pairingId}/messages`, { body }),
+    proposePlan: (pairingId: string, goal: string, items: PlanItem[]) =>
+      call<{ plan: Plan }>("POST", `/pairings/${pairingId}/plan`, { goal, items }),
+    /** Bounded catch-up: costs the same whether you missed 5 messages or 500. */
+    digest: (pairingId: string, limit = 20) =>
+      call<{ plan: Plan | null; messages: Message[]; runway?: Runway }>(
+        "GET",
+        `/pairings/${pairingId}/digest?limit=${limit}`,
+      ),
+    updateItemStatus: (pairingId: string, itemIndex: number, status: ItemStatus) =>
+      call<{ plan: Plan }>("POST", `/pairings/${pairingId}/plan/items/${itemIndex}/status`, { status }),
+    /**
+     * Mints a *child* credential holding a subset of this one's capabilities.
+     *
+     * Deliberately not `POST /pairings/mine/scope`: scope narrowing is permanent
+     * and one-way, so it could never return to cowork. The parent stays in
+     * session.json, which is what makes acquaintance mode reversible.
+     */
+    attenuate: (cap: string[], ttlSeconds?: number) => {
+      if (!session.holderPrivateKey) {
+        throw new ApiError("This session has no holder key, so it cannot attenuate its credential.", 0);
+      }
+      return call<{ credential: string; jti: string; cap: string[]; depth: number; expiresAt: string }>(
+        "POST",
+        "/credentials/attenuate",
+        // Same holder key as the parent: the child is still bound to this
+        // machine, and one key keeps proof-of-possession working unchanged.
+        { cap, cnf: { jwk: publicJwkFromPem(session.holderPrivateKey) }, ...(ttlSeconds ? { ttl: ttlSeconds } : {}) },
+      );
+    },
     /** True when this session can produce a non-repudiable approval. */
     canSignConsent: () => Boolean(session.credential && session.holderPrivateKey),
     usage: (pairingId: string) => call<UsageSnapshot>("GET", `/pairings/${pairingId}/usage`),
