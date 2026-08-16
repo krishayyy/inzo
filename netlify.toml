@@ -1,2 +1,31 @@
 [build]
   publish = "website"
+
+# Netlify's default for static assets is a 4-hour max-age, while HTML is served
+# must-revalidate. That split breaks this site on every deploy: the markup is
+# unversioned (styles.css, not styles.<hash>.css), so a returning visitor gets
+# the new HTML immediately and keeps the old CSS/JS for up to four hours. New
+# markup against old styles renders unstyled — the logo marquee, for instance,
+# collapses back to a plain bulleted list.
+#
+# The usual fix is fingerprinted filenames, but this site is hand-authored with
+# no build step to generate them. So instead these revalidate like the HTML
+# does: the browser still caches the file and still sends its ETag, and an
+# unchanged asset comes back as a cheap 304 rather than a re-download. Correct
+# on every deploy, at the cost of one conditional request per asset.
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Same reasoning: brand/logos/*.svg are referenced at fixed paths by app.js, so
+# swapping a logo file would otherwise leave the old one cached.
+[[headers]]
+  for = "/brand/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
