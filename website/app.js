@@ -123,6 +123,53 @@ document.querySelectorAll(".features article").forEach((card) => {
   });
 });
 
+// Logo marquee. The HTML authors one row; this clones it to four so the track
+// always overflows the container and the -25% keyframe lands exactly one row
+// along, making the loop seamless. Under reduced motion none of this runs and
+// the single authored row just sits there.
+const marquee = document.querySelector("[data-marquee]");
+const marqueeTrack = marquee?.querySelector(".marquee-track");
+const marqueeRow = marqueeTrack?.querySelector(".marquee-row");
+const marqueeToggle = document.querySelector("#marquee-toggle");
+
+if (marqueeTrack && marqueeRow && !reducedMotion.matches) {
+  for (let i = 0; i < 3; i++) {
+    const copy = marqueeRow.cloneNode(true);
+    // Screen readers should hear the client list once, not four times.
+    copy.setAttribute("aria-hidden", "true");
+    marqueeTrack.append(copy);
+  }
+  marqueeTrack.dataset.ready = "true";
+
+  if (marqueeToggle) {
+    marqueeToggle.hidden = false;
+    marqueeToggle.addEventListener("click", () => {
+      const paused = marquee.toggleAttribute("data-paused");
+      marqueeToggle.textContent = paused ? "Play" : "Pause";
+      marqueeToggle.setAttribute("aria-pressed", String(paused));
+    });
+  }
+}
+
+// Upgrade each wordmark to a real logo if one has been dropped into
+// brand/logos/. Probing with an off-DOM Image means a missing file costs
+// nothing visible — no broken-image glyph, no layout shift, just the wordmark
+// staying put. Runs after cloning so the copies upgrade too; the browser
+// serves them from cache, so it stays one request per logo.
+document.querySelectorAll(".marquee-item[data-logo]").forEach((item) => {
+  const src = `brand/logos/${item.dataset.logo}.svg`;
+  const probe = new Image();
+  probe.addEventListener("load", () => {
+    const mark = document.createElement("img");
+    mark.className = "logo-mark";
+    mark.src = src;
+    // Clones are aria-hidden, so their alt text would be redundant noise.
+    mark.alt = item.closest("[aria-hidden='true']") ? "" : item.dataset.label ?? "";
+    item.replaceChildren(mark);
+  });
+  probe.src = src;
+});
+
 const copyQuickstart = document.querySelector("#copy-quickstart");
 if (copyQuickstart) {
   const fullQuickstart = Array.from(document.querySelectorAll(".code-block code"))

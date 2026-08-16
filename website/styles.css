@@ -371,16 +371,76 @@ footer a:hover { color: var(--ink); text-decoration: underline; }
 .logos {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 26px 0;
-  display: flex;
-  gap: 26px;
-  align-items: center;
-  flex-wrap: wrap;
+  padding: 30px 0;
+}
+.logos-label {
+  margin: 0 0 20px;
   color: var(--muted);
   font-size: 13px;
 }
-.logos b { color: var(--ink); font-size: 14px; transition: color .25s var(--ease); cursor: default; }
-.logos b:hover { color: var(--blue); }
+
+/* Edge fade so marks don't hard-cut at the container edge. The -webkit-
+   prefix is not optional here — it is what makes this work in Safari. */
+.marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+
+.marquee-track { display: flex; width: max-content; }
+
+/* Animation is gated on [data-ready], which app.js sets only after it has
+   cloned the row to 4 copies. Without those clones the -25% keyframe below
+   would not line up, so CSS must never animate a single un-cloned row. */
+.marquee-track[data-ready] { animation: marquee-scroll 38s linear infinite; }
+.marquee:hover .marquee-track[data-ready],
+.marquee:focus-within .marquee-track[data-ready],
+.marquee[data-paused] .marquee-track[data-ready] { animation-play-state: paused; }
+
+/* padding-right matches gap so spacing across the seam equals spacing inside
+   the row — mismatch here is what makes a marquee's loop point visible. */
+.marquee-row {
+  display: flex;
+  align-items: center;
+  gap: 64px;
+  padding: 0 64px 0 0;
+  margin: 0;
+  list-style: none;
+}
+.marquee-item {
+  display: flex;
+  align-items: center;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+  opacity: .55;
+  transition: opacity .3s var(--ease);
+}
+.marquee-item:hover { opacity: 1; }
+
+/* Fixed height, auto width — normalises logos with very different aspect
+   ratios to one optical size. */
+.logo-mark { display: block; height: 24px; width: auto; }
+
+.marquee-toggle {
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .25s var(--ease);
+}
+.marquee-toggle:hover { color: var(--ink); }
+
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-25%); }
+}
 
 /* --- statement + features --------------------------------------------- */
 
@@ -620,6 +680,9 @@ footer div { display: flex; gap: 20px; }
   .runway-stats dd { font-size: 26px; }
   .access { padding: 90px 12px 100px; }
   .proof { align-items: flex-start; }
+  .marquee-row { gap: 40px; padding-right: 40px; }
+  .marquee-item { font-size: 14px; }
+  .logo-mark { height: 20px; }
 }
 
 /* --- scroll reveal ------------------------------------------------------
@@ -647,4 +710,12 @@ footer div { display: flex; gap: 20px; }
   .demo { transform: none; }
   .button:hover { transform: none; }
   .reveal { opacity: 1; transform: none; }
+  /* app.js also skips cloning here, so this is a single static row. Drop the
+     edge fade (nothing is moving under it) and let it scroll by hand instead. */
+  .marquee-track[data-ready] { animation: none; transform: none; }
+  .marquee {
+    -webkit-mask-image: none;
+    mask-image: none;
+    overflow-x: auto;
+  }
 }

@@ -103,9 +103,31 @@
     </section>
   </section>
 
+  <!-- Only clients Inzo is actually known to work with (see README). "Works
+       with" is a claim, not decoration. Each item ships as a wordmark and
+       upgrades itself to a real logo once brand/logos/<data-logo>.svg exists —
+       see brand/logos/README.md. One row is authored here; app.js clones it to
+       fill the track, so with JS off this stays a plain static row. -->
   <section class="logos reveal">
-    <span>One place for the agents your team already uses</span>
-    <b>Claude Code</b><b>Cursor</b><b>Codex</b><b>MCP</b>
+    <p class="logos-label">One place for the agents your team already uses</p>
+
+    <div class="marquee" data-marquee>
+      <div class="marquee-track">
+        <ul class="marquee-row">
+          <li class="marquee-item" data-logo="claude" data-label="Claude">Claude</li>
+          <li class="marquee-item" data-logo="openai" data-label="OpenAI Codex">Codex</li>
+          <li class="marquee-item" data-logo="cursor" data-label="Cursor">Cursor</li>
+          <li class="marquee-item" data-logo="mcp" data-label="MCP">MCP</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- WCAG 2.2.2: auto-starting motion over 5s needs a stop mechanism, and
+         prefers-reduced-motion alone does not satisfy it. Hidden until app.js
+         actually starts the animation, so it is never a dead control. -->
+    <button class="marquee-toggle" id="marquee-toggle" type="button" aria-pressed="false" hidden>
+      Pause
+    </button>
   </section>
 
   <section class="statement reveal" id="product">
