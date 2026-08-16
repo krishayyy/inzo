@@ -118,19 +118,6 @@ an `inzo` MCP server configured for Claude Code, Cursor, or any MCP client —
 prefer to wire it up by hand, or if `.mcp.json` isn't your agent's config
 format (e.g. Codex's `~/.codex/config.toml`), add it yourself:
 
-**Growing past two.** Any current member can invite more teammates into the
-same pairing — a team, not just a pair:
-
-```bash
-npx inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
-```
-
-Each invitee runs `npx inzo pair <code>` exactly as above. Plans require
-every member's approval to lock (unanimous, up to 8 members per pairing) —
-`"peer"` as a revoke/command-origin target only makes sense for the original
-two; for 3+ members, name the specific agentId instead (see `members` in
-`get_pairing_status`).
-
 ```json
 {
   "mcpServers": {
@@ -154,7 +141,20 @@ idle-sleep. Both agents must point at the **same relay**, so leave
 `INZO_WORKSPACE` is the only directory a paired agent's commands can ever touch.
 There is no default, on purpose — omit it and `run_shared_command` refuses.
 
-**3. Both people watch, from their own terminal:**
+**Growing past two.** Any current member can invite more teammates into the
+same pairing — a team, not just a pair:
+
+```bash
+npx inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
+```
+
+Each invitee runs `npx inzo pair <code>` exactly as above. Plans require
+every member's approval to lock (unanimous, up to 8 members per pairing) —
+`"peer"` as a revoke/command-origin target only makes sense for the original
+two; for 3+ members, name the specific agentId instead (see `members` in
+`get_pairing_status`).
+
+**3. Everyone watches, from their own terminal:**
 
 ```bash
 npx inzo watch
