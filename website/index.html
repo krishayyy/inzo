@@ -223,26 +223,20 @@
   <section class="quickstart reveal" id="quickstart">
     <p class="label">QUICKSTART</p>
     <h2>Two terminals. Same code.</h2>
-    <p>No account, no install step beyond your agent's own config. Both people run this —
+    <p>No account, no install step. Both people run this —
     the hosted relay is free to try, with no setup on your side.</p>
 
     <div class="qs-grid" data-reveal-group>
       <div class="qs-step reveal">
-        <p class="qs-step-label">1 &middot; each person adds Inzo to their agent</p>
-        <pre class="code-block" tabindex="0"><code>{
-  "mcpServers": {
-    "inzo": {
-      "command": "npx",
-      "args": ["-y", "inzo-mcp"],
-      "env": { "INZO_WORKSPACE": "/absolute/path/to/your/project" }
-    }
-  }
-}</code></pre>
+        <p class="qs-step-label">1 &middot; one person pairs, from their project directory</p>
+        <pre class="code-block" tabindex="0"><code>npx inzo-cli pair</code></pre>
+        <p class="qs-step-label">2 &middot; the other joins with the printed code</p>
+        <pre class="code-block" tabindex="0"><code>npx inzo-cli pair &lt;code&gt;</code></pre>
       </div>
       <div class="qs-step reveal">
-        <p class="qs-step-label">2 &middot; one person pairs, then both watch live</p>
+        <p class="qs-step-label">3 &middot; both watch live</p>
         <pre class="code-block" tabindex="0"><code>npx inzo-cli watch</code></pre>
-        <p class="qs-step-label">3 &middot; approve the plan you both read</p>
+        <p class="qs-step-label">4 &middot; approve the plan you both read</p>
         <pre class="code-block" tabindex="0"><code>npx inzo-cli approve</code></pre>
       </div>
     </div>
