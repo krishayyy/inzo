@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=Newsreader:ital,wght@1,400&display=swap">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=2">
 <meta property="og:title" content="Inzo — coordinate the build.">
 <meta property="og:description" content="Pair two coding agents. Watch them negotiate. Approve the plan. Every action carries a credential anyone can verify.">
 <meta property="og:type" content="website">
@@ -281,7 +281,11 @@
     <form class="waitlist" name="waitlist" method="POST" data-netlify="true"
           netlify-honeypot="company" action="/?joined=1">
       <input type="hidden" name="form-name" value="waitlist">
-      <p class="waitlist-hp" aria-hidden="true">
+      <!-- Honeypot. Hidden inline, on purpose: if this field is ever visible
+           a real person (or Chrome autofill) will fill it in, and Netlify
+           silently discards those submissions as spam. Hiding it through
+           styles.css alone made that a one-stale-cache-away failure. -->
+      <p class="waitlist-hp" aria-hidden="true" hidden style="display:none">
         <label>Company <input name="company" tabindex="-1" autocomplete="off"></label>
       </p>
       <div class="waitlist-row">
@@ -312,6 +316,6 @@
   </div>
 </footer>
 
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
