@@ -12,6 +12,9 @@ export const ALL_SCOPES = [
   "plan:approve",
   "usage:report",
   "commands:run",
+  "memory:read",
+  "memory:write",
+  "usage:share",
 ] as const;
 
 export type Scope = (typeof ALL_SCOPES)[number];
@@ -117,6 +120,52 @@ export interface Budget {
   updatedAt: string;
 }
 
+/**
+ * What one agent has declared about itself: which model is behind it and
+ * what it's good at. Self-reported, not verified — the point is giving
+ * both sides (and the humans watching) the facts to reason about who
+ * should take which task, not an enforced capability grant. Contrast
+ * `Scope`, which IS enforced.
+ */
+export interface AgentProfile {
+  pairingId: string;
+  agentId: string;
+  model: string | null;
+  strengths: string[];
+  updatedAt: string;
+}
+
+export type TaskStatus = "proposed" | "assigned" | "in_progress" | "blocked" | "done";
+
+/**
+ * One unit of shared work — the thing `PlanItem` doesn't quite give you: a
+ * plan item is a line of prose inside one signed document, replaced wholesale
+ * on every re-propose. A task is its own addressable record with a lifecycle,
+ * so "who owns this, why, and what changed" survives independently of
+ * whatever the plan text currently says.
+ *
+ * Assignment is not gated behind plan-style unanimous consent — that gate
+ * exists for *committing to run* the sandboxed work, which tasks don't do by
+ * themselves. What a task DOES get is the same thing every other
+ * authorization-relevant action gets: an append-only, attributed audit
+ * record, so "why was this reassigned" is answerable later without asking.
+ */
+export interface Task {
+  id: string;
+  pairingId: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  assignedTo: string | null;
+  proposedBy: string;
+  /** Free-text reasoning for the current assignment — "opus, strong at architecture, more budget left". */
+  rationale: string | null;
+  /** Ids of other tasks in this pairing that must be `done` first. Existence-checked, not cycle-checked beyond that. */
+  dependsOn: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UsageReport {
   id: string;
   pairingId: string;
@@ -171,4 +220,54 @@ export interface Runway {
 export interface UsageSnapshot {
   usage: CombinedUsage;
   runway: Runway;
+}
+
+/**
+ * A durable fact on the shared memory layer.
+ *
+ * The distinction from `Message` is the whole point: a message is a moment in
+ * a transcript, read by scrolling. A memory is a standing fact, retrieved by
+ * relevance and re-injected into an agent's context on its next turn — which
+ * is what lets two agents behave like one mind rather than two readers of the
+ * same log.
+ */
+export interface Memory {
+  id: string;
+  pairingId: string;
+  /** Who wrote it. Memory is attributed; "the team knows X" is never anonymous. */
+  authorAgentId: string;
+  /**
+   * `instruction` entries are standing orders and are ALWAYS returned by
+   * recall, never ranked away — a team instruction that only surfaces when a
+   * query happens to match it is not an instruction. `fact` entries are
+   * ranked and returned top-k.
+   */
+  kind: MemoryKind;
+  /**
+   * Stable slug. Writing the same key again REPLACES the entry rather than
+   * appending a second one, so memory converges on a current view of the
+   * world instead of accumulating contradictory copies.
+   */
+  key: string;
+  body: string;
+  tags: string[];
+  /**
+   * `team` is readable by every member; `private` is readable only by its
+   * author. Row-level visibility on top of the `memory:read` capability:
+   * scope decides whether you may read memory at all, visibility decides
+   * which rows — so sharing a mind never means surrendering everything.
+   */
+  visibility: MemoryVisibility;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MemoryKind = "fact" | "instruction";
+export type MemoryVisibility = "team" | "private";
+
+/** A memory plus why `recall` returned it — surfaced so an agent (or a human
+ *  reading the audit trail) can tell a keyword hit from a standing order. */
+export interface RecalledMemory extends Memory {
+  score: number;
+  reason: "instruction" | "match";
 }

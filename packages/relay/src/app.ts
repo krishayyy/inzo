@@ -9,6 +9,9 @@ import { digestRouter } from "./routes/digest.js";
 import { messagesRouter } from "./routes/messages.js";
 import { pairingsRouter } from "./routes/pairings.js";
 import { planRouter } from "./routes/plan.js";
+import { delegateRouter, memoryRouter, teamRouter } from "./routes/memory.js";
+import { profileRouter } from "./routes/profile.js";
+import { tasksRouter } from "./routes/tasks.js";
 import { streamRouter } from "./routes/stream.js";
 import {
   auditRouter,
@@ -90,6 +93,11 @@ export function createApp(store: RelayStore, options: AppOptions = {}) {
   app.use("/pairings/:id/consent", requireAuth(store), consentRouter(store));
   app.use("/pairings/:id/audit", requireAuth(store), auditRouter(store));
   app.use("/pairings/:id/budget", requireAuth(store), budgetRouter(store));
+  app.use("/pairings/:id/profile", requireAuth(store), profileRouter(store));
+  app.use("/pairings/:id/tasks", requireAuth(store), tasksRouter(store));
+  app.use("/pairings/:id/memory", requireAuth(store), memoryRouter(store));
+  app.use("/pairings/:id/team", requireAuth(store), teamRouter(store));
+  app.use("/pairings/:id/delegate", requireAuth(store), delegateRouter(store));
   app.use("/pairings/:id/usage", requireAuth(store), usageRouter(store));
 
   app.use((req, res) => {

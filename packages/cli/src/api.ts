@@ -67,6 +67,73 @@ export interface UsageSnapshot {
   runway: Runway;
 }
 
+/** Self-declared, not enforced — a teammate's stated model and strengths. */
+export interface AgentProfile {
+  agentId: string;
+  model: string | null;
+  strengths: string[];
+  updatedAt: string;
+}
+
+export type MemoryKind = "fact" | "instruction";
+export type MemoryVisibility = "team" | "private";
+
+export interface Memory {
+  id: string;
+  authorAgentId: string;
+  kind: MemoryKind;
+  key: string;
+  body: string;
+  tags: string[];
+  visibility: MemoryVisibility;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecalledMemory extends Memory {
+  score: number;
+  reason: "instruction" | "match";
+}
+
+export interface TeamMember {
+  agentId: string;
+  isSelf: boolean;
+  model: string | null;
+  strengths: string[];
+  revoked: boolean;
+  /** False when that member's own credential dropped `usage:share`. */
+  sharesUsage: boolean;
+  usage: { tokensUsed: number; costUsd: number; wallClockMs: number } | null;
+}
+
+export interface TeamView {
+  pairingId: string;
+  members: TeamMember[];
+  totals: { tokensUsed: number; costUsd: number; wallClockMs: number };
+  runway: Runway;
+}
+
+export interface OwnerSuggestion {
+  suggested: string;
+  rationale: string;
+  candidates: { agentId: string; model: string | null; strengthHits: number; tokensUsed: number; score: number }[];
+}
+
+export type TaskStatus = "proposed" | "assigned" | "in_progress" | "blocked" | "done";
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  assignedTo: string | null;
+  proposedBy: string;
+  rationale: string | null;
+  dependsOn: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MinePairing {
   id: string;
   agentId: string;
@@ -192,6 +259,32 @@ export function createApi(session: SessionFile) {
     usage: (pairingId: string) => call<UsageSnapshot>("GET", `/pairings/${pairingId}/usage`),
     setBudget: (pairingId: string, input: Record<string, unknown>) =>
       call<{ budget: unknown }>("PUT", `/pairings/${pairingId}/budget`, input),
+    listMemories: (pairingId: string) => call<{ memories: Memory[] }>("GET", `/pairings/${pairingId}/memory`),
+    recall: (pairingId: string, query?: string, limit?: number) => {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (limit !== undefined) params.set("limit", String(limit));
+      const qs = params.toString();
+      return call<{ memories: RecalledMemory[] }>(
+        "GET",
+        `/pairings/${pairingId}/memory/recall${qs ? `?${qs}` : ""}`,
+      );
+    },
+    remember: (pairingId: string, input: Record<string, unknown>) =>
+      call<{ memory: Memory }>("POST", `/pairings/${pairingId}/memory`, input),
+    forget: (pairingId: string, key: string) =>
+      call<{ key: string; forgotten: boolean }>("DELETE", `/pairings/${pairingId}/memory/${encodeURIComponent(key)}`),
+    getTeam: (pairingId: string) => call<TeamView>("GET", `/pairings/${pairingId}/team`),
+    suggestOwner: (pairingId: string, input: Record<string, unknown>) =>
+      call<OwnerSuggestion>("POST", `/pairings/${pairingId}/delegate`, input),
+    getProfiles: (pairingId: string) => call<{ profiles: AgentProfile[] }>("GET", `/pairings/${pairingId}/profile`),
+    getTasks: (pairingId: string) => call<{ tasks: Task[] }>("GET", `/pairings/${pairingId}/tasks`),
+    proposeTask: (pairingId: string, input: Record<string, unknown>) =>
+      call<{ task: Task }>("POST", `/pairings/${pairingId}/tasks`, input),
+    assignTask: (pairingId: string, taskId: string, input: Record<string, unknown>) =>
+      call<{ task: Task }>("PUT", `/pairings/${pairingId}/tasks/${taskId}/assign`, input),
+    updateTaskStatus: (pairingId: string, taskId: string, status: TaskStatus) =>
+      call<{ task: Task }>("PUT", `/pairings/${pairingId}/tasks/${taskId}/status`, { status }),
     revoke: (pairingId: string, target: "peer" | "self") =>
       call<{ revocation: { revokedAgentId: string; revokedAt: string; by: string } }>(
         "POST",

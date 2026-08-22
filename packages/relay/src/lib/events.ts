@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Budget, Message, Plan, UsageReport } from "../types.js";
+import type { AgentProfile, Budget, Memory, Message, Plan, Task, UsageReport } from "../types.js";
 
 /**
  * Central event bus for the relay.
@@ -20,6 +20,10 @@ export type RelayEvent =
   | { type: "plan.updated"; pairingId: string; plan: Plan }
   | { type: "usage.reported"; pairingId: string; usage: UsageReport }
   | { type: "budget.updated"; pairingId: string; budget: Budget }
+  | { type: "profile.updated"; pairingId: string; profile: AgentProfile }
+  | { type: "task.updated"; pairingId: string; task: Task }
+  | { type: "memory.updated"; pairingId: string; memory: Memory }
+  | { type: "memory.forgotten"; pairingId: string; key: string }
   | { type: "pairing.revoked"; pairingId: string; revocation: Revocation };
 
 class RelayEventBus extends EventEmitter {

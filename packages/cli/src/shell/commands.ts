@@ -1,5 +1,5 @@
 import { signConsent } from "inzo-holder";
-import type { Api, Plan, Runway } from "../api.js";
+import type { Api, Plan, Runway, TaskStatus } from "../api.js";
 import { encode, type MemberState } from "../envelope.js";
 import { branchFor, collisions, type Git } from "../git.js";
 import type { GitMode, Pairing, ShellState } from "../modes.js";
@@ -252,16 +252,173 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "who",
-    summary: "who is here, what they hold, where their branch is",
+    summary: "who is here, what they hold, what they've declared, where their branch is",
     modes: COWORK,
-    run: (ctx) => {
-      if (ctx.presence.size === 0) return ctx.print("Nobody has claimed anything yet.");
-      for (const member of ctx.presence.values()) {
-        const label = member.agentId === ctx.agentId ? "you" : shortAgent(member.agentId);
-        ctx.print(`  ${label}  ${member.claims.join(" ") || "(no claims)"}`);
-        if (member.status) ctx.print(`      ${member.status}`);
-        if (member.head) ctx.print(`      ${member.head.branch} @ ${member.head.sha.slice(0, 7)}`);
+    run: async (ctx) => {
+      // Declared profiles are fetched fresh rather than carried in presence —
+      // they change rarely (once per session, typically), so a live read
+      // avoids threading a fourth SSE event type just for this.
+      let profiles = new Map<string, { model: string | null; strengths: string[] }>();
+      try {
+        const { profiles: fetched } = await ctx.api.getProfiles(ctx.pairingId);
+        profiles = new Map(fetched.map((p) => [p.agentId, p]));
+      } catch {
+        // Best-effort — presence/claims still render without declared profiles.
       }
+
+      if (ctx.presence.size === 0 && profiles.size === 0) return ctx.print("Nobody has claimed anything yet.");
+
+      const agentIds = new Set([...ctx.presence.keys(), ...profiles.keys()]);
+      for (const agentId of agentIds) {
+        const member = ctx.presence.get(agentId);
+        const label = agentId === ctx.agentId ? "you" : shortAgent(agentId);
+        const claims = member?.claims.join(" ") || "(no claims)";
+        ctx.print(`  ${label}  ${claims}`);
+        const profile = profiles.get(agentId);
+        if (profile?.model || profile?.strengths.length) {
+          const strengths = profile.strengths.length ? ` — ${profile.strengths.join(", ")}` : "";
+          ctx.print(`      ${profile.model ?? "(model not declared)"}${strengths}`);
+        }
+        if (member?.status) ctx.print(`      ${member.status}`);
+        if (member?.head) ctx.print(`      ${member.head.branch} @ ${member.head.sha.slice(0, 7)}`);
+      }
+    },
+  },
+  {
+    name: "tasks",
+    args: "[new <title> | assign <id> <agent> [reason...] | status <id> <status>]",
+    summary: "the shared task board — list, propose, assign, or move a task",
+    modes: COWORK,
+    run: async (ctx, args) => {
+      const [sub, ...rest] = args;
+
+      if (!sub) {
+        const { tasks } = await ctx.api.getTasks(ctx.pairingId);
+        if (tasks.length === 0) return ctx.print("No tasks yet. /tasks new <title> to propose one.");
+        for (const task of tasks) {
+          const owner = task.assignedTo ? (task.assignedTo === ctx.agentId ? "you" : shortAgent(task.assignedTo)) : "unassigned";
+          ctx.print(`  [${task.status}] ${task.title}  (${owner})  ${task.id}`);
+          if (task.rationale) ctx.print(`      ${task.rationale}`);
+          if (task.dependsOn.length) ctx.print(`      depends on: ${task.dependsOn.join(", ")}`);
+        }
+        return;
+      }
+
+      if (sub === "new") {
+        const title = rest.join(" ").trim();
+        if (!title) return ctx.print("Usage: /tasks new <title>");
+        const { task } = await ctx.api.proposeTask(ctx.pairingId, { title });
+        return ctx.print(`Proposed ${task.id}: ${task.title}`);
+      }
+
+      if (sub === "assign") {
+        const [taskId, agentId, ...reasonParts] = rest;
+        if (!taskId || !agentId) return ctx.print("Usage: /tasks assign <id> <agent> [reason...]");
+        const rationale = reasonParts.join(" ").trim() || undefined;
+        const { task } = await ctx.api.assignTask(ctx.pairingId, taskId, { assignedTo: agentId, rationale });
+        return ctx.print(`${task.id} assigned to ${shortAgent(task.assignedTo!)}${rationale ? ` — ${rationale}` : ""}`);
+      }
+
+      if (sub === "status") {
+        const [taskId, status] = rest;
+        const valid: TaskStatus[] = ["proposed", "assigned", "in_progress", "blocked", "done"];
+        if (!taskId || !valid.includes(status as TaskStatus)) {
+          return ctx.print(`Usage: /tasks status <id> <${valid.join("|")}>`);
+        }
+        const { task } = await ctx.api.updateTaskStatus(ctx.pairingId, taskId, status as TaskStatus);
+        return ctx.print(`${task.id} -> ${task.status}`);
+      }
+
+      ctx.print("Usage: /tasks [new <title> | assign <id> <agent> [reason...] | status <id> <status>]");
+    },
+  },
+  {
+    name: "memory",
+    args: "[<query> | add <key> <text...> | rule <key> <text...> | forget <key>]",
+    summary: "the team's shared memory — what both agents know, not just what was said",
+    // Cowork only: memory is the one surface where an acquaintance-mode peer
+    // could read standing context about a repo they were never given access
+    // to. Narrowing the credential is the enforcement; this is the guardrail.
+    modes: COWORK,
+    run: async (ctx, args) => {
+      const [sub, ...rest] = args;
+
+      if (sub === "add" || sub === "rule") {
+        const [key, ...bodyParts] = rest;
+        const body = bodyParts.join(" ").trim();
+        if (!key || !body) return ctx.print(`Usage: /memory ${sub} <key> <text...>`);
+        const { memory } = await ctx.api.remember(ctx.pairingId, {
+          key,
+          body,
+          kind: sub === "rule" ? "instruction" : "fact",
+        });
+        return ctx.print(
+          `${memory.kind === "instruction" ? "Standing rule" : "Remembered"} "${memory.key}" — both agents will recall this.`,
+        );
+      }
+
+      if (sub === "forget") {
+        const [key] = rest;
+        if (!key) return ctx.print("Usage: /memory forget <key>");
+        const { key: forgotten } = await ctx.api.forget(ctx.pairingId, key);
+        return ctx.print(`Forgot "${forgotten}".`);
+      }
+
+      // Bare `/memory` lists everything; `/memory <words>` is a recall query,
+      // so the human sees exactly what their agent would see.
+      const query = args.join(" ").trim();
+      const { memories } = query
+        ? await ctx.api.recall(ctx.pairingId, query)
+        : { memories: await ctx.api.listMemories(ctx.pairingId).then((res) => res.memories) };
+
+      if (memories.length === 0) {
+        return ctx.print(query ? `Nothing recalled for "${query}".` : "No shared memory yet. /memory add <key> <text>");
+      }
+      for (const memory of memories) {
+        const author = memory.authorAgentId === ctx.agentId ? "you" : shortAgent(memory.authorAgentId);
+        const badge = memory.kind === "instruction" ? "RULE " : "";
+        const privateMark = memory.visibility === "private" ? " (private)" : "";
+        ctx.print(`  ${badge}${memory.key}${privateMark}  — ${author}`);
+        ctx.print(`      ${memory.body}`);
+      }
+    },
+  },
+  {
+    name: "team",
+    summary: "who's on the team: model, strengths, and tokens spent",
+    modes: BOTH,
+    run: async (ctx) => {
+      const team = await ctx.api.getTeam(ctx.pairingId);
+      for (const member of team.members) {
+        const who = member.isSelf ? "you" : shortAgent(member.agentId);
+        const model = member.model ?? "(model not declared)";
+        ctx.print(`  ${who}  ${model}${member.revoked ? "  [REVOKED]" : ""}`);
+        if (member.strengths.length) ctx.print(`      strengths: ${member.strengths.join(", ")}`);
+        // A member who narrowed away `usage:share` is shown as withholding
+        // rather than as zero — "we don't know" and "spent nothing" are very
+        // different facts when you're deciding who can take more work.
+        ctx.print(
+          member.usage
+            ? `      ${member.usage.tokensUsed.toLocaleString()} tokens  $${member.usage.costUsd.toFixed(2)}`
+            : `      tokens not shared`,
+        );
+      }
+      ctx.print(`  ---`);
+      ctx.print(`  team total: ${team.totals.tokensUsed.toLocaleString()} tokens  $${team.totals.costUsd.toFixed(2)}`);
+    },
+  },
+  {
+    name: "delegate",
+    args: "<task description...>",
+    summary: "ask who should take a piece of work, from models and tokens spent",
+    modes: COWORK,
+    run: async (ctx, args) => {
+      const title = args.join(" ").trim();
+      if (!title) return ctx.print("Usage: /delegate <task description...>");
+      const suggestion = await ctx.api.suggestOwner(ctx.pairingId, { title });
+      const who = suggestion.suggested === ctx.agentId ? "you" : shortAgent(suggestion.suggested);
+      ctx.print(`  -> ${who}: ${suggestion.rationale}`);
+      ctx.print(`  /tasks new ${title}   then   /tasks assign <id> ${suggestion.suggested} <reason>`);
     },
   },
   {

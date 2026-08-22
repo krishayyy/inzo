@@ -419,6 +419,252 @@ export function registerTools(server: McpServer): void {
     },
   );
 
+  // -----------------------------------------------------------------
+  // Shared memory
+  //
+  // These two tools are what turn a pairing into a shared mind, and their
+  // descriptions matter as much as their code: an agent only behaves like a
+  // teammate if it recalls BEFORE working and remembers AFTER deciding,
+  // without a human prompting it each time. Hence the explicit "call this
+  // first" framing rather than a neutral description.
+  // -----------------------------------------------------------------
+
+  server.registerTool(
+    "recall",
+    {
+      title: "Recall the team's shared memory",
+      description:
+        "Read the team's shared memory before you start work, and before you answer any question about how this project does things. Returns two kinds of entry: standing instructions (always returned — treat these as team rules that apply to your work) and facts relevant to your query, ranked. This is memory your teammate's agent wrote as well as your own, so it is how you find out what the other side already decided, tried, or ruled out — without re-litigating it or asking a human to repeat it. Call this at the start of a task, not only when you feel stuck.",
+      inputSchema: {
+        query: z
+          .string()
+          .optional()
+          .describe("What you're about to work on. Omit to get standing instructions plus the most recent facts."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max facts to return (default 12)"),
+      },
+    },
+    async (input) => {
+      try {
+        const { memories } = await relayClient.recall(
+          requirePairingId(),
+          await auth(),
+          input.query,
+          input.limit,
+        );
+        return textResult(memories);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "remember",
+    {
+      title: "Write a durable fact into the team's shared memory",
+      description:
+        "Record something the whole team should still know next session — a decision and its reasoning, a constraint discovered the hard way, an approach that failed and why, a convention this codebase follows. Write these as you learn them, not in a batch at the end. Use a stable key: writing the same key again REPLACES the entry, which is how memory stays current instead of accumulating contradictions, so prefer updating an existing key over inventing a near-duplicate. Set kind='instruction' for a standing rule everyone must follow (these are always surfaced by recall); leave it as a fact otherwise. Set visibility='private' for context that should stay on your side of the pairing — a private memory is never readable by your teammate's agent.",
+      inputSchema: {
+        key: z
+          .string()
+          .min(1)
+          .describe("Stable slug, e.g. 'deploy-target' or 'why-not-postgres'. Re-using a key replaces that entry."),
+        body: z.string().min(1).max(4000).describe("The fact itself, written so it is useful without this conversation"),
+        kind: z
+          .enum(["fact", "instruction"])
+          .optional()
+          .describe("'instruction' = a standing team rule, always surfaced by recall. Default 'fact'."),
+        tags: z.array(z.string().min(1).max(40)).max(20).optional(),
+        visibility: z
+          .enum(["team", "private"])
+          .optional()
+          .describe("'private' keeps it readable only by you. Default 'team'."),
+      },
+    },
+    async (input) => {
+      try {
+        const { memory } = await relayClient.remember(requirePairingId(), await auth(), input);
+        return textResult(memory);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "forget",
+    {
+      title: "Delete a shared memory",
+      description:
+        "Remove a memory that is now wrong or obsolete. Worth doing rather than leaving stale: a wrong memory keeps being injected into your teammate's context every time they recall. Only the author of a memory can forget it.",
+      inputSchema: { key: z.string().min(1) },
+    },
+    async (input) => {
+      try {
+        return textResult(await relayClient.forget(requirePairingId(), await auth(), input.key));
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "suggest_owner",
+    {
+      title: "Ask who on the team should take a piece of work",
+      description:
+        "Given a task, returns which member is best placed to take it and why, computed from every member's declared model and strengths plus how many tokens each has already spent. Use this instead of guessing when splitting work: it accounts for the teammate's declared strengths and remaining runway rather than who happens to be free. It only SUGGESTS — assignment is still an explicit propose_task/assign_task call, and the returned rationale is meant to be passed straight into it.",
+      inputSchema: {
+        title: z.string().optional().describe("The task title"),
+        description: z.string().nullable().optional(),
+        needs: z.array(z.string()).optional().describe("Capability hints, e.g. ['rust', 'perf']"),
+      },
+    },
+    async (input) => {
+      try {
+        return textResult(await relayClient.suggestOwner(requirePairingId(), await auth(), input));
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "declare_profile",
+    {
+      title: "Declare this agent's model and strengths",
+      description:
+        "Tell the peer (and both humans) what model is behind this agent and what it's good at, so task splits can be reasoned about rather than claimed first-come. Self-reported and not enforced — call get_teammates for the peer's own declaration plus remaining budget before proposing who takes what.",
+      inputSchema: {
+        model: z.string().min(1).nullable().optional().describe("e.g. 'claude-opus-5', 'gpt-5-codex' — null to clear"),
+        strengths: z
+          .array(z.string().min(1).max(60))
+          .max(20)
+          .optional()
+          .describe("Short tags, e.g. ['architecture', 'refactor', 'tests', 'docs']"),
+      },
+    },
+    async (input) => {
+      try {
+        const { profile } = await relayClient.setProfile(requirePairingId(), await auth(), input);
+        return textResult(profile);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_teammates",
+    {
+      title: "Get every teammate's declared model, strengths, and usage",
+      description:
+        "Fetch what every member of this pairing has declared about themselves (model, strengths) alongside their usage/runway, in one call. Use this before proposing a task split or picking up work, so the split accounts for who's actually suited to what and who has budget left to do it — not just who claimed first.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const credentials = await auth();
+        const [{ profiles }, usage] = await Promise.all([
+          relayClient.getProfiles(requirePairingId(), credentials),
+          relayClient.getUsage(requirePairingId(), credentials),
+        ]);
+        return textResult({ profiles, usage });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  const TASK_STATUSES = ["proposed", "assigned", "in_progress", "blocked", "done"] as const;
+
+  server.registerTool(
+    "propose_task",
+    {
+      title: "Propose a shared task",
+      description:
+        "Add one task to the shared task board — an addressable unit of work that survives independently of the plan text, with its own status and owner. Optionally assign it immediately with a rationale (call get_teammates first so the rationale is grounded in the peer's declared model, strengths, and remaining budget — not just who claimed it first). Every proposal and assignment is recorded to the audit trail, so 'why was this decided' is answerable later.",
+      inputSchema: {
+        title: z.string().min(1).max(200),
+        description: z.string().nullable().optional(),
+        dependsOn: z.array(z.string()).optional().describe("Ids of other tasks that must be done first"),
+        assignTo: z.string().optional().describe("agentId to assign immediately, or omit to leave unassigned"),
+        rationale: z.string().nullable().optional().describe("Why this owner — e.g. declared strength or remaining budget"),
+      },
+    },
+    async (input) => {
+      try {
+        const { task } = await relayClient.proposeTask(requirePairingId(), await auth(), input);
+        return textResult(task);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_tasks",
+    {
+      title: "Get the shared task board",
+      description: "List every task in this pairing: title, status, owner, rationale, and dependencies.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const { tasks } = await relayClient.getTasks(requirePairingId(), await auth());
+        return textResult(tasks);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "assign_task",
+    {
+      title: "Assign or reassign a task",
+      description:
+        "Assign a task to a specific teammate with a rationale. Use this for the initial split as well as reassignment (e.g. an agent is out of budget, or the work turned out to need a different strength) — every call is a fresh, attributed audit record, never a silent overwrite.",
+      inputSchema: {
+        taskId: z.string(),
+        assignedTo: z.string().describe("agentId to assign to"),
+        rationale: z.string().nullable().optional(),
+      },
+    },
+    async ({ taskId, assignedTo, rationale }) => {
+      try {
+        const { task } = await relayClient.assignTask(requirePairingId(), await auth(), taskId, {
+          assignedTo,
+          rationale,
+        });
+        return textResult(task);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "update_task_status",
+    {
+      title: "Update a task's status",
+      description:
+        "Move a task through proposed -> assigned -> in_progress -> done (or blocked). Marking a task done is refused while any task it depends on isn't done yet.",
+      inputSchema: {
+        taskId: z.string(),
+        status: z.enum(TASK_STATUSES),
+      },
+    },
+    async ({ taskId, status }) => {
+      try {
+        const { task } = await relayClient.updateTaskStatus(requirePairingId(), await auth(), taskId, status);
+        return textResult(task);
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
   server.registerTool(
     "report_usage",
     {

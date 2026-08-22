@@ -344,3 +344,72 @@ describe("budget and usage", () => {
     store.close();
   });
 });
+
+describe("agent profiles", () => {
+  it("declares a model and strengths, and lists every member even if only one declared", async () => {
+    const { app, store } = setup();
+    const { pairingId, a, b } = await pair(app);
+    await request(app)
+      .put(`/pairings/${pairingId}/profile`)
+      .set(a.auth)
+      .send({ model: "claude-opus-5", strengths: ["architecture", "refactor"] });
+
+    const res = await request(app).get(`/pairings/${pairingId}/profile`).set(b.auth);
+    expect(res.status).toBe(200);
+    const byAgent = Object.fromEntries(
+      (res.body.profiles as Array<{ agentId: string; model: string | null; strengths: string[] }>).map((p) => [
+        p.agentId,
+        p,
+      ]),
+    );
+    expect(byAgent[a.agentId].model).toBe("claude-opus-5");
+    expect(byAgent[a.agentId].strengths).toEqual(["architecture", "refactor"]);
+    // b never declared — still present, with empty defaults, not omitted.
+    expect(byAgent[b.agentId].model).toBeNull();
+    expect(byAgent[b.agentId].strengths).toEqual([]);
+    store.close();
+  });
+
+  it("updates in place without an explicit field clobbering it to empty", async () => {
+    const { app, store } = setup();
+    const { pairingId, a } = await pair(app);
+    await request(app).put(`/pairings/${pairingId}/profile`).set(a.auth).send({ model: "claude-opus-5" });
+    const res = await request(app)
+      .put(`/pairings/${pairingId}/profile`)
+      .set(a.auth)
+      .send({ strengths: ["tests"] });
+
+    expect(res.body.profile.model).toBe("claude-opus-5");
+    expect(res.body.profile.strengths).toEqual(["tests"]);
+    store.close();
+  });
+
+  it("can only declare the caller's own profile, never a peer's", async () => {
+    const { app, store } = setup();
+    const { pairingId, a, b } = await pair(app);
+    await request(app).put(`/pairings/${pairingId}/profile`).set(a.auth).send({ model: "claude-opus-5" });
+    await request(app).put(`/pairings/${pairingId}/profile`).set(b.auth).send({ model: "gpt-5-codex" });
+
+    const res = await request(app).get(`/pairings/${pairingId}/profile`).set(a.auth);
+    const byAgent = Object.fromEntries(
+      (res.body.profiles as Array<{ agentId: string; model: string | null }>).map((p) => [p.agentId, p.model]),
+    );
+    expect(byAgent[a.agentId]).toBe("claude-opus-5");
+    expect(byAgent[b.agentId]).toBe("gpt-5-codex");
+    store.close();
+  });
+
+  it("rejects an empty model string and an oversized strengths list", async () => {
+    const { app, store } = setup();
+    const { pairingId, a } = await pair(app);
+    const badModel = await request(app).put(`/pairings/${pairingId}/profile`).set(a.auth).send({ model: "  " });
+    expect(badModel.status).toBe(400);
+
+    const tooMany = await request(app)
+      .put(`/pairings/${pairingId}/profile`)
+      .set(a.auth)
+      .send({ strengths: Array.from({ length: 21 }, (_, i) => `s${i}`) });
+    expect(tooMany.status).toBe(400);
+    store.close();
+  });
+});

@@ -483,6 +483,9 @@ describe("GET /pairings/mine", () => {
       "plan:approve",
       "usage:report",
       "commands:run",
+      "memory:read",
+      "memory:write",
+      "usage:share",
     ]);
     expect(res.body.pairing.revoked).toBe(false);
     expect(res.body.pairing.peerRevoked).toBe(false);

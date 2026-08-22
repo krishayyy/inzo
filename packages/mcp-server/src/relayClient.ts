@@ -267,6 +267,101 @@ export interface ReportUsageInput {
   progressPct?: number;
 }
 
+export interface AgentProfileInput {
+  model?: string | null;
+  strengths?: string[];
+}
+
+/** Self-declared, not enforced — see relay's RelayStore agent profile section. */
+export interface AgentProfile {
+  pairingId: string;
+  agentId: string;
+  model: string | null;
+  strengths: string[];
+  updatedAt: string;
+}
+
+export type MemoryKind = "fact" | "instruction";
+export type MemoryVisibility = "team" | "private";
+
+export interface Memory {
+  id: string;
+  pairingId: string;
+  authorAgentId: string;
+  kind: MemoryKind;
+  key: string;
+  body: string;
+  tags: string[];
+  visibility: MemoryVisibility;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecalledMemory extends Memory {
+  score: number;
+  reason: "instruction" | "match";
+}
+
+export interface RememberInput {
+  key: string;
+  body: string;
+  kind?: MemoryKind;
+  tags?: string[];
+  visibility?: MemoryVisibility;
+}
+
+export interface TeamMember {
+  agentId: string;
+  isSelf: boolean;
+  model: string | null;
+  strengths: string[];
+  revoked: boolean;
+  sharesUsage: boolean;
+  usage: { tokensUsed: number; costUsd: number; wallClockMs: number } | null;
+}
+
+export interface TeamView {
+  pairingId: string;
+  members: TeamMember[];
+  totals: { tokensUsed: number; costUsd: number; wallClockMs: number };
+  runway: unknown;
+}
+
+export interface OwnerSuggestion {
+  suggested: string;
+  rationale: string;
+  candidates: { agentId: string; model: string | null; strengthHits: number; tokensUsed: number; score: number }[];
+}
+
+export type TaskStatus = "proposed" | "assigned" | "in_progress" | "blocked" | "done";
+
+export interface Task {
+  id: string;
+  pairingId: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  assignedTo: string | null;
+  proposedBy: string;
+  rationale: string | null;
+  dependsOn: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProposeTaskInput {
+  title: string;
+  description?: string | null;
+  dependsOn?: string[];
+  assignTo?: string;
+  rationale?: string | null;
+}
+
+export interface AssignTaskInput {
+  assignedTo: string;
+  rationale?: string | null;
+}
+
 // ---------- Client ----------
 
 export const relayClient = {
@@ -394,6 +489,98 @@ export const relayClient = {
 
   getBudget(pairingId: string, auth: Auth | string): Promise<{ budget: Budget | null }> {
     return request("GET", `/pairings/${encodeURIComponent(pairingId)}/budget`, undefined, undefined, auth);
+  },
+
+  /** Declares THIS caller's own model + strengths — there is no way to set a peer's. */
+  setProfile(pairingId: string, auth: Auth | string, input: AgentProfileInput): Promise<{ profile: AgentProfile }> {
+    return request("PUT", `/pairings/${encodeURIComponent(pairingId)}/profile`, input, undefined, auth);
+  },
+
+  /** Every member's declared profile — model + strengths — for reasoning about task fit. */
+  getProfiles(pairingId: string, auth: Auth | string): Promise<{ profiles: AgentProfile[] }> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/profile`, undefined, undefined, auth);
+  },
+
+  /** Write or REPLACE a shared memory by key. */
+  remember(pairingId: string, auth: Auth | string, input: RememberInput): Promise<{ memory: Memory }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/memory`, input, undefined, auth);
+  },
+
+  /** Relevance retrieval. Standing instructions always come back; facts are top-k. */
+  recall(
+    pairingId: string,
+    auth: Auth | string,
+    query?: string,
+    limit?: number,
+  ): Promise<{ memories: RecalledMemory[] }> {
+    return request(
+      "GET",
+      `/pairings/${encodeURIComponent(pairingId)}/memory/recall`,
+      undefined,
+      { q: query, limit },
+      auth,
+    );
+  },
+
+  listMemories(pairingId: string, auth: Auth | string): Promise<{ memories: Memory[] }> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/memory`, undefined, undefined, auth);
+  },
+
+  forget(pairingId: string, auth: Auth | string, key: string): Promise<{ key: string; forgotten: boolean }> {
+    return request(
+      "DELETE",
+      `/pairings/${encodeURIComponent(pairingId)}/memory/${encodeURIComponent(key)}`,
+      undefined,
+      undefined,
+      auth,
+    );
+  },
+
+  /** Roster: model, strengths and (where shared) spend, for every member. */
+  getTeam(pairingId: string, auth: Auth | string): Promise<TeamView> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/team`, undefined, undefined, auth);
+  },
+
+  /** "Who should take this?" — suggestion only; assignment stays explicit. */
+  suggestOwner(
+    pairingId: string,
+    auth: Auth | string,
+    input: { title?: string; description?: string | null; needs?: string[] },
+  ): Promise<OwnerSuggestion> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/delegate`, input, undefined, auth);
+  },
+
+  getTasks(pairingId: string, auth: Auth | string): Promise<{ tasks: Task[] }> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/tasks`, undefined, undefined, auth);
+  },
+
+  proposeTask(pairingId: string, auth: Auth | string, input: ProposeTaskInput): Promise<{ task: Task }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/tasks`, input, undefined, auth);
+  },
+
+  assignTask(pairingId: string, auth: Auth | string, taskId: string, input: AssignTaskInput): Promise<{ task: Task }> {
+    return request(
+      "PUT",
+      `/pairings/${encodeURIComponent(pairingId)}/tasks/${encodeURIComponent(taskId)}/assign`,
+      input,
+      undefined,
+      auth,
+    );
+  },
+
+  updateTaskStatus(
+    pairingId: string,
+    auth: Auth | string,
+    taskId: string,
+    status: TaskStatus,
+  ): Promise<{ task: Task }> {
+    return request(
+      "PUT",
+      `/pairings/${encodeURIComponent(pairingId)}/tasks/${encodeURIComponent(taskId)}/status`,
+      { status },
+      undefined,
+      auth,
+    );
   },
 
   reportUsage(pairingId: string, auth: Auth | string, input: ReportUsageInput): Promise<UsageSnapshot> {

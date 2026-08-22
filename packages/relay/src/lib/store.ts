@@ -12,14 +12,21 @@ import type { Jwk } from "./credential.js";
 import type { Assurance } from "./audit.js";
 import {
   ALL_SCOPES,
+  type AgentProfile,
   type Budget,
   type CombinedUsage,
+  type Memory,
+  type MemoryKind,
+  type MemoryVisibility,
   type Message,
   type Pairing,
   type PairingCode,
   type Plan,
   type PlanItem,
+  type RecalledMemory,
   type Scope,
+  type Task,
+  type TaskStatus,
   type TokenIdentity,
   type UsageReport,
   type UsageSnapshot,
@@ -101,6 +108,48 @@ CREATE TABLE IF NOT EXISTS budgets (
   cost_budget_usd REAL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  pairing_id TEXT NOT NULL REFERENCES pairings(id),
+  agent_id TEXT NOT NULL,
+  model TEXT,
+  strengths TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (pairing_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  pairing_id TEXT NOT NULL REFERENCES pairings(id),
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  assigned_to TEXT,
+  proposed_by TEXT NOT NULL,
+  rationale TEXT,
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_pairing ON tasks(pairing_id, created_at);
+
+-- The shared memory layer. The key is unique per pairing so re-remembering a
+-- key replaces it (see RelayStore.remember): memory converges rather than
+-- accumulating contradictory copies of the same fact.
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY,
+  pairing_id TEXT NOT NULL REFERENCES pairings(id),
+  author_agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  key TEXT NOT NULL,
+  body TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  visibility TEXT NOT NULL DEFAULT 'team',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (pairing_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_memories_pairing ON memories(pairing_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS usage_reports (
   id TEXT PRIMARY KEY,
@@ -199,6 +248,93 @@ export interface BudgetInput {
   deadline?: string | null;
   tokenBudget?: number | null;
   costBudgetUsd?: number | null;
+}
+
+export interface AgentProfileInput {
+  model?: string | null;
+  strengths?: string[];
+}
+
+interface AgentProfileRow {
+  pairing_id: string;
+  agent_id: string;
+  model: string | null;
+  strengths: string;
+  updated_at: string;
+}
+
+export interface ProposeTaskInput {
+  title: string;
+  description?: string | null;
+  dependsOn?: string[];
+  /** Optional immediate assignment at proposal time — still recorded as attributed, with rationale. */
+  assignTo?: string;
+  rationale?: string | null;
+}
+
+export interface AssignTaskInput {
+  assignedTo: string;
+  rationale?: string | null;
+}
+
+export interface RememberInput {
+  key: string;
+  body: string;
+  kind?: MemoryKind;
+  tags?: string[];
+  visibility?: MemoryVisibility;
+}
+
+export interface RecallInput {
+  query?: string;
+  limit?: number;
+}
+
+export interface SuggestOwnerInput {
+  title?: string;
+  description?: string | null;
+  /** Explicit capability hints, matched against declared strengths. */
+  needs?: string[];
+}
+
+export interface OwnerSuggestion {
+  suggested: string;
+  rationale: string;
+  candidates: { agentId: string; model: string | null; strengthHits: number; tokensUsed: number; score: number }[];
+}
+
+interface MemoryRow {
+  id: string;
+  pairing_id: string;
+  author_agent_id: string;
+  kind: string;
+  key: string;
+  body: string;
+  tags: string;
+  visibility: string;
+  created_at: string;
+  updated_at: string;
+}
+
+const MEMORY_KINDS: readonly MemoryKind[] = ["fact", "instruction"];
+const MEMORY_VISIBILITIES: readonly MemoryVisibility[] = ["team", "private"];
+const DEFAULT_RECALL_LIMIT = 12;
+const MAX_RECALL_LIMIT = 50;
+
+const TASK_STATUSES: readonly TaskStatus[] = ["proposed", "assigned", "in_progress", "blocked", "done"];
+
+interface TaskRow {
+  id: string;
+  pairing_id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  assigned_to: string | null;
+  proposed_by: string;
+  rationale: string | null;
+  depends_on: string;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Bounded-size catch-up view of a pairing. See `RelayStore.getDigest`. */
@@ -941,6 +1077,487 @@ export class RelayStore {
   }
 
   // ---------------------------------------------------------------------
+  // Agent profiles
+  //
+  // Self-declared, not enforced — a teammate's stated model and strengths,
+  // so a peer proposing a task split (or a human watching) has the facts to
+  // reason about who should take what. This is deliberately separate from
+  // `Scope`: scope is checked on every request and can only narrow; a
+  // profile is just a claim, closer to a name tag than a credential.
+  // ---------------------------------------------------------------------
+
+  setAgentProfile(pairingId: string, agentId: string, input: AgentProfileInput): AgentProfile {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, agentId);
+
+    const existing = this.getAgentProfileRow(pairingId, agentId);
+    const strengths =
+      input.strengths !== undefined ? normalizeStrengths(input.strengths) : (existing ? JSON.parse(existing.strengths) : []);
+    const model = "model" in input ? normalizeModel(input.model) : (existing?.model ?? null);
+    const updatedAt = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `INSERT INTO agent_profiles (pairing_id, agent_id, model, strengths, updated_at)
+         VALUES (@pairingId, @agentId, @model, @strengths, @updatedAt)
+         ON CONFLICT(pairing_id, agent_id) DO UPDATE SET
+           model = excluded.model,
+           strengths = excluded.strengths,
+           updated_at = excluded.updated_at`,
+      )
+      .run({ pairingId, agentId, model, strengths: JSON.stringify(strengths), updatedAt });
+
+    const profile: AgentProfile = { pairingId, agentId, model, strengths, updatedAt };
+    relayEvents.publish({ type: "profile.updated", pairingId, profile });
+    return profile;
+  }
+
+  /** Every member's declared profile, including members who never declared one
+   *  (returned with `model: null, strengths: []`) — so a caller can always
+   *  render the full roster without a second lookup per member. */
+  getAgentProfiles(pairingId: string): AgentProfile[] {
+    const pairing = this.getPairing(pairingId);
+    const rows = this.db
+      .prepare(`SELECT * FROM agent_profiles WHERE pairing_id = ?`)
+      .all(pairingId) as AgentProfileRow[];
+    const byAgent = new Map(rows.map((row) => [row.agent_id, this.rowToAgentProfile(row)]));
+    const updatedAt = new Date(0).toISOString();
+    return pairing.members.map(
+      (agentId) => byAgent.get(agentId) ?? { pairingId, agentId, model: null, strengths: [], updatedAt },
+    );
+  }
+
+  private getAgentProfileRow(pairingId: string, agentId: string): AgentProfileRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM agent_profiles WHERE pairing_id = ? AND agent_id = ?`)
+      .get(pairingId, agentId) as AgentProfileRow | undefined;
+  }
+
+  private rowToAgentProfile(row: AgentProfileRow): AgentProfile {
+    return {
+      pairingId: row.pairing_id,
+      agentId: row.agent_id,
+      model: row.model,
+      strengths: JSON.parse(row.strengths),
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Tasks
+  //
+  // Unlike the plan, a task is not gated behind unanimous signed consent —
+  // that gate exists for committing the sandbox to actually run work, and
+  // proposing/assigning a task doesn't run anything by itself. What every
+  // mutation DOES get is an attributed, tamper-evident audit record (the
+  // same log plan/consent/revocation write to), so "why was this assigned,
+  // and by whom" is answerable from the audit trail later, not just from
+  // whoever remembers the conversation.
+  // ---------------------------------------------------------------------
+
+  proposeTask(pairingId: string, proposedBy: string, input: ProposeTaskInput): Task {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, proposedBy);
+
+    if (typeof input.title !== "string" || !input.title.trim()) {
+      throw badRequest("title is required");
+    }
+    const dependsOn = this.normalizeDependsOn(pairingId, input.dependsOn);
+    if (input.assignTo !== undefined) this.assertMember(pairing, input.assignTo);
+
+    const now = new Date().toISOString();
+    const task: Task = {
+      id: generateId("task"),
+      pairingId,
+      title: input.title.trim().slice(0, 200),
+      description: input.description?.trim() || null,
+      status: input.assignTo ? "assigned" : "proposed",
+      assignedTo: input.assignTo ?? null,
+      proposedBy,
+      rationale: input.rationale?.trim() || null,
+      dependsOn,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO tasks (id, pairing_id, title, description, status, assigned_to, proposed_by, rationale, depends_on, created_at, updated_at)
+         VALUES (@id, @pairingId, @title, @description, @status, @assignedTo, @proposedBy, @rationale, @dependsOn, @createdAt, @updatedAt)`,
+      )
+      .run({ ...task, dependsOn: JSON.stringify(task.dependsOn) });
+
+    this.recordTaskEvent(pairingId, proposedBy, "task.proposed", task, {
+      title: task.title,
+      assignedTo: task.assignedTo,
+    });
+    relayEvents.publish({ type: "task.updated", pairingId, task });
+    return task;
+  }
+
+  /**
+   * Reassigns (or first-assigns) a task, with a required rationale — the
+   * point of this being its own call rather than a generic PATCH is that
+   * "who owns this and why" is exactly the fact that must survive into the
+   * audit trail, not be inferable only from a diff.
+   */
+  assignTask(pairingId: string, actorAgentId: string, taskId: string, input: AssignTaskInput): Task {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, actorAgentId);
+    this.assertMember(pairing, input.assignedTo);
+    const existing = this.getTaskRow(pairingId, taskId);
+    if (!existing) throw notFound(`No task "${taskId}" in pairing "${pairingId}"`);
+
+    const rationale = input.rationale?.trim() || null;
+    const updatedAt = new Date().toISOString();
+    const status: TaskStatus = existing.status === "proposed" || existing.status === "assigned" ? "assigned" : (existing.status as TaskStatus);
+
+    this.db
+      .prepare(`UPDATE tasks SET assigned_to = ?, status = ?, rationale = ?, updated_at = ? WHERE id = ?`)
+      .run(input.assignedTo, status, rationale, updatedAt, taskId);
+
+    const task = this.rowToTask({ ...existing, assigned_to: input.assignedTo, status, rationale, updated_at: updatedAt });
+    this.recordTaskEvent(pairingId, actorAgentId, "task.assigned", task, {
+      from: existing.assigned_to,
+      to: input.assignedTo,
+      rationale,
+    });
+    relayEvents.publish({ type: "task.updated", pairingId, task });
+    return task;
+  }
+
+  updateTaskStatus(pairingId: string, actorAgentId: string, taskId: string, status: unknown): Task {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, actorAgentId);
+    if (typeof status !== "string" || !TASK_STATUSES.includes(status as TaskStatus)) {
+      throw badRequest(`status must be one of ${TASK_STATUSES.join(", ")}`);
+    }
+    const existing = this.getTaskRow(pairingId, taskId);
+    if (!existing) throw notFound(`No task "${taskId}" in pairing "${pairingId}"`);
+
+    // "done" is a claim worth being able to trust: block it while an
+    // upstream dependency isn't done yet, the same way PlanItem.dependsOn
+    // guards item completion (§types.ts PlanItem).
+    if (status === "done") {
+      const dependsOn: string[] = JSON.parse(existing.depends_on);
+      for (const depId of dependsOn) {
+        const dep = this.getTaskRow(pairingId, depId);
+        if (dep && dep.status !== "done") {
+          throw conflict(`Task "${taskId}" depends on "${depId}", which is not done yet`);
+        }
+      }
+    }
+
+    const updatedAt = new Date().toISOString();
+    this.db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`).run(status, updatedAt, taskId);
+    const task = this.rowToTask({ ...existing, status, updated_at: updatedAt });
+    this.recordTaskEvent(pairingId, actorAgentId, "task.status_changed", task, {
+      from: existing.status,
+      to: status,
+    });
+    relayEvents.publish({ type: "task.updated", pairingId, task });
+    return task;
+  }
+
+  getTasks(pairingId: string): Task[] {
+    this.getPairing(pairingId);
+    const rows = this.db
+      .prepare(`SELECT * FROM tasks WHERE pairing_id = ? ORDER BY created_at ASC`)
+      .all(pairingId) as TaskRow[];
+    return rows.map((row) => this.rowToTask(row));
+  }
+
+  private normalizeDependsOn(pairingId: string, value: unknown): string[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw badRequest("dependsOn must be an array of task ids");
+    for (const id of value) {
+      if (typeof id !== "string" || !this.getTaskRow(pairingId, id)) {
+        throw badRequest(`dependsOn references unknown task "${id}"`);
+      }
+    }
+    return [...new Set(value as string[])];
+  }
+
+  private getTaskRow(pairingId: string, taskId: string): TaskRow | undefined {
+    return this.db.prepare(`SELECT * FROM tasks WHERE pairing_id = ? AND id = ?`).get(pairingId, taskId) as
+      | TaskRow
+      | undefined;
+  }
+
+  private recordTaskEvent(
+    pairingId: string,
+    actorAgentId: string,
+    action: "task.proposed" | "task.assigned" | "task.status_changed",
+    task: Task,
+    detail: Record<string, unknown>,
+  ): void {
+    this.credentials.record(
+      pairingId,
+      action,
+      { principal: this.credentials.agentPrincipal(actorAgentId), agent: actorAgentId, credential: null },
+      "pop",
+      { taskId: task.id, ...detail },
+    );
+  }
+
+  private rowToTask(row: TaskRow): Task {
+    return {
+      id: row.id,
+      pairingId: row.pairing_id,
+      title: row.title,
+      description: row.description,
+      status: row.status as TaskStatus,
+      assignedTo: row.assigned_to,
+      proposedBy: row.proposed_by,
+      rationale: row.rationale,
+      dependsOn: JSON.parse(row.depends_on),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Shared memory
+  //
+  // The layer that makes a pairing a teammate rather than a chat room. A
+  // `Message` is a moment in a transcript; a `Memory` is a standing fact that
+  // gets re-injected into whichever agent is about to work. Two rules do most
+  // of the work here:
+  //
+  //   1. Writing an existing key REPLACES it. Memory has to converge on a
+  //      current view of the world; an append-only pile of contradictory
+  //      facts is just the transcript again, and worse to read.
+  //   2. Instructions are never ranked away. A standing order that only
+  //      surfaces when a query happens to match its wording is not a standing
+  //      order, so `kind: "instruction"` rows are always returned by recall.
+  //
+  // Reading is gated twice, deliberately. `memory:read` decides whether a
+  // credential may touch memory at all; per-row `visibility` decides which
+  // rows it sees. That is what keeps "share one mind" from silently meaning
+  // "your teammate's agent can read every note about your private repo" —
+  // an agent can hold facts the team cannot see, and narrowing a credential
+  // to drop `memory:read` cuts the whole layer off without deleting anything.
+  // ---------------------------------------------------------------------
+
+  remember(pairingId: string, authorAgentId: string, input: RememberInput): Memory {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, authorAgentId);
+
+    const key = normalizeMemoryKey(input.key);
+    const body = normalizeMemoryBody(input.body);
+    const kind = normalizeMemoryKind(input.kind);
+    const visibility = normalizeMemoryVisibility(input.visibility);
+    const tags = input.tags === undefined ? [] : normalizeMemoryTags(input.tags);
+
+    const existing = this.getMemoryRow(pairingId, key);
+    // A private memory belongs to whoever wrote it. Letting a peer overwrite
+    // it would turn a shared key namespace into a way to silently rewrite
+    // another agent's private context.
+    if (existing && existing.visibility === "private" && existing.author_agent_id !== authorAgentId) {
+      throw forbidden(`Memory "${key}" is private to another member`);
+    }
+
+    const now = new Date().toISOString();
+    const createdAt = existing?.created_at ?? now;
+
+    this.db
+      .prepare(
+        `INSERT INTO memories (id, pairing_id, author_agent_id, kind, key, body, tags, visibility, created_at, updated_at)
+         VALUES (@id, @pairingId, @authorAgentId, @kind, @key, @body, @tags, @visibility, @createdAt, @updatedAt)
+         ON CONFLICT(pairing_id, key) DO UPDATE SET
+           author_agent_id = excluded.author_agent_id,
+           kind = excluded.kind,
+           body = excluded.body,
+           tags = excluded.tags,
+           visibility = excluded.visibility,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        id: existing?.id ?? generateId("mem"),
+        pairingId,
+        authorAgentId,
+        kind,
+        key,
+        body,
+        tags: JSON.stringify(tags),
+        visibility,
+        createdAt,
+        updatedAt: now,
+      });
+
+    const memory = this.rowToMemory(this.getMemoryRow(pairingId, key)!);
+    this.credentials.record(
+      pairingId,
+      existing ? "memory.updated" : "memory.written",
+      { principal: this.credentials.agentPrincipal(authorAgentId), agent: authorAgentId, credential: null },
+      "pop",
+      { memoryId: memory.id, key, kind, visibility },
+    );
+    relayEvents.publish({ type: "memory.updated", pairingId, memory });
+    return memory;
+  }
+
+  /**
+   * Relevance retrieval over the memory a given reader is allowed to see.
+   *
+   * Scoring is lexical on purpose — no embedding service, no network call, no
+   * model dependency in the trust boundary. A relay that had to call out to
+   * embed text would be a relay that leaks the team's memory to a third party
+   * on every recall, which is exactly the property this product cannot have.
+   * Lexical ranking is weaker, but it is auditable and offline, and the key/
+   * tag weighting below recovers most of the practical difference.
+   */
+  recall(pairingId: string, readerAgentId: string, input: RecallInput = {}): RecalledMemory[] {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, readerAgentId);
+
+    const limit = normalizeMemoryLimit(input.limit);
+    const rows = this.db
+      .prepare(`SELECT * FROM memories WHERE pairing_id = ? ORDER BY updated_at DESC`)
+      .all(pairingId) as MemoryRow[];
+
+    const visible = rows.filter((row) => row.visibility === "team" || row.author_agent_id === readerAgentId);
+    const terms = memoryTerms(input.query);
+
+    // Standing orders first, always, and outside the top-k budget — see the
+    // section comment. Newest last so the most recent instruction is the one
+    // an agent reads closest to its own turn.
+    const instructions: RecalledMemory[] = visible
+      .filter((row) => row.kind === "instruction")
+      .map((row) => ({ ...this.rowToMemory(row), score: Number.POSITIVE_INFINITY, reason: "instruction" as const }))
+      .reverse();
+
+    const facts = visible.filter((row) => row.kind === "fact");
+    const scored = facts
+      .map((row) => ({ row, score: scoreMemory(row, terms) }))
+      // With no query, recall degrades to "the most recently updated facts",
+      // which is the right default for an agent asking "what do we know?"
+      .filter((entry) => terms.length === 0 || entry.score > 0)
+      .sort((a, b) => b.score - a.score || b.row.updated_at.localeCompare(a.row.updated_at))
+      .slice(0, limit)
+      .map((entry) => ({ ...this.rowToMemory(entry.row), score: entry.score, reason: "match" as const }));
+
+    return [...instructions, ...scored];
+  }
+
+  /** Everything the reader may see, unranked — the Memory tab's list view. */
+  listMemories(pairingId: string, readerAgentId: string): Memory[] {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, readerAgentId);
+    const rows = this.db
+      .prepare(`SELECT * FROM memories WHERE pairing_id = ? ORDER BY updated_at DESC`)
+      .all(pairingId) as MemoryRow[];
+    return rows
+      .filter((row) => row.visibility === "team" || row.author_agent_id === readerAgentId)
+      .map((row) => this.rowToMemory(row));
+  }
+
+  /**
+   * Forgetting is a real operation, not a soft flag: a memory that is wrong
+   * keeps being re-injected into a teammate's context until it is gone. Only
+   * the author may forget, so a peer cannot quietly delete what your agent
+   * knows.
+   */
+  forget(pairingId: string, actorAgentId: string, key: string): { key: string; forgotten: boolean } {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, actorAgentId);
+    const normalized = normalizeMemoryKey(key);
+    const existing = this.getMemoryRow(pairingId, normalized);
+    if (!existing) throw notFound(`No memory "${normalized}" in pairing "${pairingId}"`);
+    if (existing.author_agent_id !== actorAgentId) {
+      throw forbidden(`Only the author of memory "${normalized}" can forget it`);
+    }
+
+    this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(existing.id);
+    this.credentials.record(
+      pairingId,
+      "memory.forgotten",
+      { principal: this.credentials.agentPrincipal(actorAgentId), agent: actorAgentId, credential: null },
+      "pop",
+      { memoryId: existing.id, key: normalized },
+    );
+    relayEvents.publish({ type: "memory.forgotten", pairingId, key: normalized });
+    return { key: normalized, forgotten: true };
+  }
+
+  private getMemoryRow(pairingId: string, key: string): MemoryRow | undefined {
+    return this.db.prepare(`SELECT * FROM memories WHERE pairing_id = ? AND key = ?`).get(pairingId, key) as
+      | MemoryRow
+      | undefined;
+  }
+
+  private rowToMemory(row: MemoryRow): Memory {
+    return {
+      id: row.id,
+      pairingId: row.pairing_id,
+      authorAgentId: row.author_agent_id,
+      kind: row.kind as MemoryKind,
+      key: row.key,
+      body: row.body,
+      tags: JSON.parse(row.tags),
+      visibility: row.visibility as MemoryVisibility,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Delegation
+  // ---------------------------------------------------------------------
+
+  /**
+   * Suggests an owner for a task from declared profiles and live usage.
+   *
+   * This only ever SUGGESTS. Assignment stays an explicit, attributed call
+   * (`assignTask`) because "who owns this" is a claim a human may need to
+   * overrule, and an auto-assigning relay would be making that call on their
+   * behalf with no signature behind it. What this returns is a rationale
+   * good enough to paste into `assignTask` — the routing brain, not the hand.
+   */
+  suggestOwner(pairingId: string, input: SuggestOwnerInput = {}): OwnerSuggestion {
+    const pairing = this.getPairing(pairingId);
+    const profiles = new Map(this.getAgentProfiles(pairingId).map((profile) => [profile.agentId, profile]));
+    const usage = this.getUsage(pairingId);
+    const wanted = memoryTerms([input.title, input.description, (input.needs ?? []).join(" ")].filter(Boolean).join(" "));
+
+    const candidates = pairing.members
+      // A revoked member cannot do the work, so it must never be suggested.
+      .filter((agentId) => !this.isAgentRevoked(agentId))
+      .map((agentId) => {
+        const profile = profiles.get(agentId);
+        const strengths = (profile?.strengths ?? []).map((entry) => entry.toLowerCase());
+        // Strength match dominates: the right model for the job matters more
+        // than who happens to be cheapest right now.
+        const strengthHits = wanted.filter((term) =>
+          strengths.some((strength) => strength.includes(term) || term.includes(strength)),
+        ).length;
+        const spent = usage.byAgent[agentId]?.tokensUsed ?? 0;
+        return { agentId, model: profile?.model ?? null, strengthHits, tokensUsed: spent };
+      });
+
+    // Load balance on tokens spent, normalized so the tiebreak can never
+    // outrank a real strength match — an idle teammate with the wrong model
+    // should not win over a busy one with the right one.
+    const busiest = Math.max(1, ...candidates.map((entry) => entry.tokensUsed));
+    const ranked = candidates
+      .map((entry) => ({ ...entry, score: entry.strengthHits * 10 + (1 - entry.tokensUsed / busiest) }))
+      .sort((a, b) => b.score - a.score || a.tokensUsed - b.tokensUsed);
+
+    const best = ranked[0];
+    if (!best) throw conflict(`Pairing "${pairingId}" has no eligible members to take work`);
+
+    const why = best.strengthHits
+      ? `matches ${best.strengthHits} of the task's needs${best.model ? ` on ${best.model}` : ""}`
+      : `no declared strength matched, so this is the member with the most runway left${best.model ? ` (${best.model})` : ""}`;
+
+    return {
+      suggested: best.agentId,
+      rationale: `${shortId(best.agentId)} ${why}; ${best.tokensUsed.toLocaleString()} tokens spent so far.`,
+      candidates: ranked,
+    };
+  }
+
+  // ---------------------------------------------------------------------
   // Budget
   // ---------------------------------------------------------------------
 
@@ -1172,6 +1789,112 @@ function normalizeDeadline(value: unknown): string | null {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw badRequest(`deadline "${value}" is not a valid ISO-8601 timestamp`);
   return parsed.toISOString();
+}
+
+function normalizeMemoryKey(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw badRequest("key is required");
+  // Keys are an addressable namespace shared by both agents, so they are
+  // normalized rather than taken literally: "Deploy Target" and
+  // "deploy-target" must be the same fact, or replacement silently forks.
+  const key = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!key) throw badRequest("key must contain at least one alphanumeric character");
+  return key.slice(0, 80);
+}
+
+function normalizeMemoryBody(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw badRequest("body is required");
+  const body = value.trim();
+  if (body.length > 4000) throw badRequest("body must be 4000 characters or fewer");
+  return body;
+}
+
+function normalizeMemoryKind(value: unknown): MemoryKind {
+  if (value === undefined || value === null) return "fact";
+  if (typeof value !== "string" || !MEMORY_KINDS.includes(value as MemoryKind)) {
+    throw badRequest(`kind must be one of ${MEMORY_KINDS.join(", ")}`);
+  }
+  return value as MemoryKind;
+}
+
+function normalizeMemoryVisibility(value: unknown): MemoryVisibility {
+  if (value === undefined || value === null) return "team";
+  if (typeof value !== "string" || !MEMORY_VISIBILITIES.includes(value as MemoryVisibility)) {
+    throw badRequest(`visibility must be one of ${MEMORY_VISIBILITIES.join(", ")}`);
+  }
+  return value as MemoryVisibility;
+}
+
+function normalizeMemoryTags(value: unknown): string[] {
+  if (!Array.isArray(value)) throw badRequest("tags must be an array of strings");
+  if (value.length > 20) throw badRequest("at most 20 tags");
+  return [
+    ...new Set(
+      value.map((entry) => {
+        if (typeof entry !== "string" || !entry.trim()) throw badRequest("each tag must be a non-empty string");
+        return entry.trim().toLowerCase().slice(0, 40);
+      }),
+    ),
+  ];
+}
+
+function normalizeMemoryLimit(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_RECALL_LIMIT;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw badRequest("limit must be a positive integer");
+  }
+  return Math.min(value, MAX_RECALL_LIMIT);
+}
+
+/** Lowercased words of 2+ chars. Short enough to catch "ci", long enough to
+ *  drop the articles that would otherwise match everything. */
+function memoryTerms(query: unknown): string[] {
+  if (typeof query !== "string" || !query.trim()) return [];
+  return [...new Set(query.toLowerCase().match(/[a-z0-9]{2,}/g) ?? [])];
+}
+
+/**
+ * Weighted lexical score. A term in the key is a much stronger signal than
+ * the same term buried in prose, and a tag is an explicit "this is what this
+ * is about" from the author — so both outrank body hits, and body hits are
+ * capped so one long rambling memory cannot dominate every query.
+ */
+function scoreMemory(row: MemoryRow, terms: string[]): number {
+  if (terms.length === 0) return 0;
+  const key = row.key.toLowerCase();
+  const body = row.body.toLowerCase();
+  const tags: string[] = JSON.parse(row.tags);
+  let score = 0;
+  for (const term of terms) {
+    if (key.includes(term)) score += 4;
+    if (tags.some((tag) => tag.includes(term))) score += 3;
+    const hits = body.split(term).length - 1;
+    if (hits > 0) score += Math.min(hits, 3);
+  }
+  return score;
+}
+
+function shortId(agentId: string): string {
+  return agentId.replace(/^agent_/, "").slice(0, 8);
+}
+
+function normalizeModel(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || !value.trim()) throw badRequest("model must be a non-empty string or null");
+  return value.trim().slice(0, 200);
+}
+
+function normalizeStrengths(value: unknown): string[] {
+  if (!Array.isArray(value)) throw badRequest("strengths must be an array of strings");
+  const strengths = value.map((entry) => {
+    if (typeof entry !== "string" || !entry.trim()) throw badRequest("each strength must be a non-empty string");
+    return entry.trim().slice(0, 60);
+  });
+  if (strengths.length > 20) throw badRequest("at most 20 strengths");
+  return strengths;
 }
 
 function normalizeNumber(value: unknown, name: string): number | null {
