@@ -20,6 +20,7 @@ import {
   AUDIT_SCHEMA,
   badRequest,
   computeRunway,
+  conflict,
   CONSENT_SCHEMA,
   foldUsage,
   forbidden,
@@ -27,9 +28,21 @@ import {
   GENESIS_HASH,
   hashRecord,
   isSatisfied,
+  memoryTerms,
+  normalizeMemoryBody,
+  normalizeMemoryKey,
+  normalizeMemoryKind,
+  normalizeMemoryLimit,
+  normalizeMemoryTags,
+  normalizeMemoryVisibility,
+  normalizeModel,
+  normalizeStrengths,
   notFound,
   planSubjectHash,
   rowToConsent,
+  scoreMemory,
+  shortAgentId,
+  TASK_STATUSES,
   stalePlan,
   subjectHashMismatch,
   verifyApprovalSignature,
@@ -43,7 +56,47 @@ import {
   type CredentialPayload,
 } from "./lib.js";
 import { rpcSafe, type RpcResult } from "./rpcError.js";
-import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, UsageReport, UsageSnapshot } from "./types.js";
+import type {
+  AgentProfile,
+  Budget,
+  CombinedUsage,
+  ItemStatus,
+  Memory,
+  MemoryKind,
+  MemoryVisibility,
+  Message,
+  Pairing,
+  Plan,
+  PlanItem,
+  PlanWithStatus,
+  RecalledMemory,
+  Task,
+  TaskStatus,
+  UsageReport,
+  UsageSnapshot,
+} from "./types.js";
+
+/** The roster returned by GET /pairings/:id/team. */
+export interface TeamView {
+  pairingId: string;
+  members: {
+    agentId: string;
+    isSelf: boolean;
+    model: string | null;
+    strengths: string[];
+    revoked: boolean;
+    sharesUsage: boolean;
+    usage: { tokensUsed: number; costUsd: number; wallClockMs: number } | null;
+  }[];
+  totals: { tokensUsed: number; costUsd: number; wallClockMs: number };
+  runway: UsageSnapshot["runway"];
+}
+
+export interface OwnerSuggestion {
+  suggested: string;
+  rationale: string;
+  candidates: { agentId: string; model: string | null; strengthHits: number; tokensUsed: number; score: number }[];
+}
 
 /** Bounds join-spam via repeated per-invite codes on one pairing. Mirrors packages/relay's store.ts. */
 const MAX_MEMBERS = 8;
@@ -134,6 +187,41 @@ CREATE TABLE IF NOT EXISTS usage_reports (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  agent_id TEXT PRIMARY KEY,
+  model TEXT,
+  strengths TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  assigned_to TEXT,
+  proposed_by TEXT NOT NULL,
+  rationale TEXT,
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- The shared memory layer. Mirrors packages/relay's schema, minus the
+-- pairing_id column: in this implementation the pairing IS the object, so
+-- the key alone is unique. Re-remembering a key replaces that entry.
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY,
+  author_agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  key TEXT NOT NULL UNIQUE,
+  body TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  visibility TEXT NOT NULL DEFAULT 'team',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 ${CONSENT_SCHEMA}
 ${AUDIT_SCHEMA}
 `;
@@ -166,6 +254,38 @@ interface UsageRow {
   wall_clock_ms: number;
   progress_pct: number;
   created_at: string;
+}
+
+interface ProfileRow {
+  agent_id: string;
+  model: string | null;
+  strengths: string;
+  updated_at: string;
+}
+
+interface TaskRow {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  assigned_to: string | null;
+  proposed_by: string;
+  rationale: string | null;
+  depends_on: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MemoryRow {
+  id: string;
+  author_agent_id: string;
+  kind: string;
+  key: string;
+  body: string;
+  tags: string;
+  visibility: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface PlanRow {
@@ -439,6 +559,9 @@ export class PairingRoom extends DurableObject<Env> {
       version: row.version,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // See proposePlan: no AgentRun integration on this relay.
+      sandboxId: null,
+      sandboxState: null,
     };
   }
 
@@ -543,7 +666,23 @@ export class PairingRoom extends DurableObject<Env> {
       const createdAt = existing?.created_at ?? now;
       const version = (existing?.version ?? 0) + 1;
 
-      const plan: Plan = { pairingId, goal, items, proposedBy, approvedBy: [], locked: false, version, createdAt, updatedAt: now };
+      // sandbox* are null rather than omitted: this relay has no AgentRun
+      // integration (packages/relay's plan wait), and a Plan that silently
+      // lacked the fields would deserialize differently here than on the
+      // Node relay for the same pairing.
+      const plan: Plan = {
+        pairingId,
+        goal,
+        items,
+        proposedBy,
+        approvedBy: [],
+        locked: false,
+        version,
+        createdAt,
+        updatedAt: now,
+        sandboxId: null,
+        sandboxState: null,
+      };
 
       this.ctx.storage.sql.exec(
         `INSERT INTO plans (pairing_id, goal, items, proposed_by, approved_by, locked, version, created_at, updated_at)
@@ -946,6 +1085,482 @@ export class PairingRoom extends DurableObject<Env> {
         plan: this.getPlan(),
         consent: this.getConsentOrThrow(),
         recentMessages: this.getRecentMessages(pairing.id, limit),
+      };
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Agent profiles — self-declared model + strengths. Mirrors packages/relay.
+  // -----------------------------------------------------------------------
+
+  setProfile(agentId: string, input: { model?: unknown; strengths?: unknown }): RpcResult<AgentProfile> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, agentId);
+
+      const existing = this.profileRow(agentId);
+      const strengths =
+        input.strengths !== undefined
+          ? normalizeStrengths(input.strengths)
+          : existing
+            ? (JSON.parse(existing.strengths) as string[])
+            : [];
+      const model = "model" in input ? normalizeModel(input.model) : (existing?.model ?? null);
+      const updatedAt = new Date().toISOString();
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO agent_profiles (agent_id, model, strengths, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(agent_id) DO UPDATE SET model = excluded.model, strengths = excluded.strengths, updated_at = excluded.updated_at`,
+        agentId,
+        model,
+        JSON.stringify(strengths),
+        updatedAt,
+      );
+
+      const profile: AgentProfile = { pairingId: pairing.id, agentId, model, strengths, updatedAt };
+      this.broadcast("profile.updated", { profile });
+      return profile;
+    });
+  }
+
+  /** Every member, including those who never declared — so a caller can render
+   *  the full roster without a second lookup per member. */
+  getProfiles(): RpcResult<AgentProfile[]> {
+    return rpcSafe(() => this.getProfilesOrThrow());
+  }
+
+  private getProfilesOrThrow(): AgentProfile[] {
+    const pairing = this.getPairingOrThrow();
+    const rows = [...this.ctx.storage.sql.exec(`SELECT * FROM agent_profiles`)] as unknown as ProfileRow[];
+    const byAgent = new Map(rows.map((row) => [row.agent_id, row]));
+    const never = new Date(0).toISOString();
+    return pairing.members.map((agentId) => {
+      const row = byAgent.get(agentId);
+      return {
+        pairingId: pairing.id,
+        agentId,
+        model: row?.model ?? null,
+        strengths: row ? (JSON.parse(row.strengths) as string[]) : [],
+        updatedAt: row?.updated_at ?? never,
+      };
+    });
+  }
+
+  private profileRow(agentId: string): ProfileRow | undefined {
+    return ([...this.ctx.storage.sql.exec(`SELECT * FROM agent_profiles WHERE agent_id = ?`, agentId)] as unknown as ProfileRow[])[0];
+  }
+
+  // -----------------------------------------------------------------------
+  // Tasks — the shared board. Not behind signed consent (that gate is for
+  // committing the sandbox to run work); every mutation is audited instead.
+  // -----------------------------------------------------------------------
+
+  proposeTask(
+    proposedBy: string,
+    input: { title?: unknown; description?: unknown; dependsOn?: unknown; assignTo?: unknown; rationale?: unknown },
+    actor: AuditActor,
+    assurance: Assurance,
+  ): RpcResult<Task> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, proposedBy);
+      if (typeof input.title !== "string" || !input.title.trim()) throw badRequest("title is required");
+
+      const dependsOn = this.normalizeDependsOn(input.dependsOn);
+      if (input.assignTo !== undefined) {
+        if (typeof input.assignTo !== "string") throw badRequest("assignTo must be an agentId");
+        this.assertMemberOrThrow(pairing, input.assignTo);
+      }
+      const rationale = typeof input.rationale === "string" && input.rationale.trim() ? input.rationale.trim() : null;
+      const description = typeof input.description === "string" && input.description.trim() ? input.description.trim() : null;
+
+      const now = new Date().toISOString();
+      const task: Task = {
+        id: generateId("task"),
+        pairingId: pairing.id,
+        title: input.title.trim().slice(0, 200),
+        description,
+        status: input.assignTo ? "assigned" : "proposed",
+        assignedTo: (input.assignTo as string | undefined) ?? null,
+        proposedBy,
+        rationale,
+        dependsOn,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO tasks (id, title, description, status, assigned_to, proposed_by, rationale, depends_on, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        task.id,
+        task.title,
+        task.description,
+        task.status,
+        task.assignedTo,
+        task.proposedBy,
+        task.rationale,
+        JSON.stringify(task.dependsOn),
+        task.createdAt,
+        task.updatedAt,
+      );
+
+      this.appendAudit("task.proposed", actor, assurance, { taskId: task.id, title: task.title, assignedTo: task.assignedTo });
+      this.broadcast("task.updated", { task });
+      return task;
+    });
+  }
+
+  assignTask(
+    actorAgentId: string,
+    taskId: string,
+    input: { assignedTo?: unknown; rationale?: unknown },
+    actor: AuditActor,
+    assurance: Assurance,
+  ): RpcResult<Task> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, actorAgentId);
+      if (typeof input.assignedTo !== "string") throw badRequest("assignedTo must be an agentId");
+      this.assertMemberOrThrow(pairing, input.assignedTo);
+
+      const existing = this.taskRow(taskId);
+      if (!existing) throw notFound(`No task "${taskId}" in pairing "${pairing.id}"`);
+
+      const rationale = typeof input.rationale === "string" && input.rationale.trim() ? input.rationale.trim() : null;
+      const updatedAt = new Date().toISOString();
+      const status = existing.status === "proposed" || existing.status === "assigned" ? "assigned" : existing.status;
+
+      this.ctx.storage.sql.exec(
+        `UPDATE tasks SET assigned_to = ?, status = ?, rationale = ?, updated_at = ? WHERE id = ?`,
+        input.assignedTo,
+        status,
+        rationale,
+        updatedAt,
+        taskId,
+      );
+
+      const task = this.rowToTask({ ...existing, assigned_to: input.assignedTo, status, rationale, updated_at: updatedAt }, pairing.id);
+      this.appendAudit("task.assigned", actor, assurance, {
+        taskId,
+        from: existing.assigned_to,
+        to: input.assignedTo,
+        rationale,
+      });
+      this.broadcast("task.updated", { task });
+      return task;
+    });
+  }
+
+  updateTaskStatus(
+    actorAgentId: string,
+    taskId: string,
+    status: unknown,
+    actor: AuditActor,
+    assurance: Assurance,
+  ): RpcResult<Task> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, actorAgentId);
+      if (typeof status !== "string" || !TASK_STATUSES.includes(status as TaskStatus)) {
+        throw badRequest(`status must be one of ${TASK_STATUSES.join(", ")}`);
+      }
+      const existing = this.taskRow(taskId);
+      if (!existing) throw notFound(`No task "${taskId}" in pairing "${pairing.id}"`);
+
+      // "done" is a claim worth being able to trust, so it is blocked while an
+      // upstream dependency is still open.
+      if (status === "done") {
+        for (const depId of JSON.parse(existing.depends_on) as string[]) {
+          const dep = this.taskRow(depId);
+          if (dep && dep.status !== "done") {
+            throw conflict(`Task "${taskId}" depends on "${depId}", which is not done yet`);
+          }
+        }
+      }
+
+      const updatedAt = new Date().toISOString();
+      this.ctx.storage.sql.exec(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`, status, updatedAt, taskId);
+      const task = this.rowToTask({ ...existing, status, updated_at: updatedAt }, pairing.id);
+      this.appendAudit("task.status_changed", actor, assurance, { taskId, from: existing.status, to: status });
+      this.broadcast("task.updated", { task });
+      return task;
+    });
+  }
+
+  getTasks(): RpcResult<Task[]> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      const rows = [...this.ctx.storage.sql.exec(`SELECT * FROM tasks ORDER BY created_at ASC`)] as unknown as TaskRow[];
+      return rows.map((row) => this.rowToTask(row, pairing.id));
+    });
+  }
+
+  private normalizeDependsOn(value: unknown): string[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw badRequest("dependsOn must be an array of task ids");
+    for (const id of value) {
+      if (typeof id !== "string" || !this.taskRow(id)) throw badRequest(`dependsOn references unknown task "${String(id)}"`);
+    }
+    return [...new Set(value as string[])];
+  }
+
+  private taskRow(taskId: string): TaskRow | undefined {
+    return ([...this.ctx.storage.sql.exec(`SELECT * FROM tasks WHERE id = ?`, taskId)] as unknown as TaskRow[])[0];
+  }
+
+  private rowToTask(row: TaskRow, pairingId: string): Task {
+    return {
+      id: row.id,
+      pairingId,
+      title: row.title,
+      description: row.description,
+      status: row.status as TaskStatus,
+      assignedTo: row.assigned_to,
+      proposedBy: row.proposed_by,
+      rationale: row.rationale,
+      dependsOn: JSON.parse(row.depends_on) as string[],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Shared memory
+  //
+  // Mirrors packages/relay's semantics exactly, and for the same reasons:
+  // writing a key REPLACES it so memory converges rather than accumulating
+  // contradictions; instructions are never ranked away; visibility is
+  // enforced per row on top of the memory:read capability, so sharing one
+  // mind never means surrendering everything.
+  // -----------------------------------------------------------------------
+
+  remember(
+    authorAgentId: string,
+    input: { key?: unknown; body?: unknown; kind?: unknown; tags?: unknown; visibility?: unknown },
+    actor: AuditActor,
+    assurance: Assurance,
+  ): RpcResult<Memory> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, authorAgentId);
+
+      const key = normalizeMemoryKey(input.key);
+      const body = normalizeMemoryBody(input.body);
+      const kind = normalizeMemoryKind(input.kind);
+      const visibility = normalizeMemoryVisibility(input.visibility);
+      const tags = input.tags === undefined ? [] : normalizeMemoryTags(input.tags);
+
+      const existing = this.memoryRow(key);
+      // A private memory belongs to its author; letting a peer overwrite it
+      // would make a shared key namespace a way to rewrite the other side's
+      // private context.
+      if (existing && existing.visibility === "private" && existing.author_agent_id !== authorAgentId) {
+        throw forbidden(`Memory "${key}" is private to another member`);
+      }
+
+      const now = new Date().toISOString();
+      const id = existing?.id ?? generateId("mem");
+      const createdAt = existing?.created_at ?? now;
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO memories (id, author_agent_id, kind, key, body, tags, visibility, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           author_agent_id = excluded.author_agent_id,
+           kind = excluded.kind,
+           body = excluded.body,
+           tags = excluded.tags,
+           visibility = excluded.visibility,
+           updated_at = excluded.updated_at`,
+        id,
+        authorAgentId,
+        kind,
+        key,
+        body,
+        JSON.stringify(tags),
+        visibility,
+        createdAt,
+        now,
+      );
+
+      const memory = this.rowToMemory(this.memoryRow(key)!, pairing.id);
+      this.appendAudit(existing ? "memory.updated" : "memory.written", actor, assurance, {
+        memoryId: memory.id,
+        key,
+        kind,
+        visibility,
+      });
+      this.broadcast("memory.updated", { memory });
+      return memory;
+    });
+  }
+
+  /**
+   * Lexical relevance retrieval, scoped to what this reader may see.
+   *
+   * Deliberately not embedding-based: a relay that called out to embed text
+   * would leak the team's memory to a third party on every recall, which is
+   * the one property this product cannot have.
+   */
+  recall(readerAgentId: string, query?: string, limit?: number): RpcResult<RecalledMemory[]> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, readerAgentId);
+
+      const max = normalizeMemoryLimit(limit);
+      const rows = [...this.ctx.storage.sql.exec(`SELECT * FROM memories ORDER BY updated_at DESC`)] as unknown as MemoryRow[];
+      const visible = rows.filter((row) => row.visibility === "team" || row.author_agent_id === readerAgentId);
+      const terms = memoryTerms(query);
+
+      const instructions: RecalledMemory[] = visible
+        .filter((row) => row.kind === "instruction")
+        .map((row) => ({ ...this.rowToMemory(row, pairing.id), score: Number.POSITIVE_INFINITY, reason: "instruction" as const }))
+        .reverse();
+
+      const facts = visible
+        .filter((row) => row.kind === "fact")
+        .map((row) => ({ row, score: scoreMemory(row, terms) }))
+        .filter((entry) => terms.length === 0 || entry.score > 0)
+        // Total ordering — see packages/relay's recall for why the key is the
+        // final tiebreak.
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            b.row.updated_at.localeCompare(a.row.updated_at) ||
+            a.row.key.localeCompare(b.row.key),
+        )
+        .slice(0, max)
+        .map((entry) => ({ ...this.rowToMemory(entry.row, pairing.id), score: entry.score, reason: "match" as const }));
+
+      return [...instructions, ...facts];
+    });
+  }
+
+  listMemories(readerAgentId: string): RpcResult<Memory[]> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, readerAgentId);
+      const rows = [...this.ctx.storage.sql.exec(`SELECT * FROM memories ORDER BY updated_at DESC`)] as unknown as MemoryRow[];
+      return rows
+        .filter((row) => row.visibility === "team" || row.author_agent_id === readerAgentId)
+        .map((row) => this.rowToMemory(row, pairing.id));
+    });
+  }
+
+  /** Author-only: a peer must not be able to delete what your agent knows. */
+  forget(actorAgentId: string, key: string, actor: AuditActor, assurance: Assurance): RpcResult<{ key: string; forgotten: boolean }> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      this.assertMemberOrThrow(pairing, actorAgentId);
+      const normalized = normalizeMemoryKey(key);
+      const existing = this.memoryRow(normalized);
+      if (!existing) throw notFound(`No memory "${normalized}" in pairing "${pairing.id}"`);
+      if (existing.author_agent_id !== actorAgentId) {
+        throw forbidden(`Only the author of memory "${normalized}" can forget it`);
+      }
+
+      this.ctx.storage.sql.exec(`DELETE FROM memories WHERE id = ?`, existing.id);
+      this.appendAudit("memory.forgotten", actor, assurance, { memoryId: existing.id, key: normalized });
+      this.broadcast("memory.forgotten", { key: normalized });
+      return { key: normalized, forgotten: true };
+    });
+  }
+
+  private memoryRow(key: string): MemoryRow | undefined {
+    return ([...this.ctx.storage.sql.exec(`SELECT * FROM memories WHERE key = ?`, key)] as unknown as MemoryRow[])[0];
+  }
+
+  private rowToMemory(row: MemoryRow, pairingId: string): Memory {
+    return {
+      id: row.id,
+      pairingId,
+      authorAgentId: row.author_agent_id,
+      kind: row.kind as MemoryKind,
+      key: row.key,
+      body: row.body,
+      tags: JSON.parse(row.tags) as string[],
+      visibility: row.visibility as MemoryVisibility,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Team + delegation
+  // -----------------------------------------------------------------------
+
+  /**
+   * The roster. `sharesUsage` is decided by the Worker (it owns the registry
+   * that knows each member's scope) and passed in, because the DO deliberately
+   * has no access to credentials — see the class comment on isolation.
+   */
+  getTeam(selfAgentId: string, sharesUsage: Record<string, boolean>): RpcResult<TeamView> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      const { usage, runway } = this.getUsageSnapshot();
+      const members = this.getProfilesOrThrow().map((profile) => {
+        // Your own row is always visible to you; a peer's only if their own
+        // credential still carries usage:share.
+        const shares = profile.agentId === selfAgentId || sharesUsage[profile.agentId] === true;
+        return {
+          agentId: profile.agentId,
+          isSelf: profile.agentId === selfAgentId,
+          model: profile.model,
+          strengths: profile.strengths,
+          revoked: false,
+          sharesUsage: shares,
+          usage: shares ? (usage.byAgent[profile.agentId] ?? null) : null,
+        };
+      });
+      return { pairingId: pairing.id, members, totals: usage.totals, runway };
+    });
+  }
+
+  /**
+   * Suggests an owner from declared strengths and live spend. Suggestion only:
+   * assignment stays an attributed assignTask call a human can overrule.
+   */
+  suggestOwner(input: { title?: unknown; description?: unknown; needs?: unknown }, eligible: string[]): RpcResult<OwnerSuggestion> {
+    return rpcSafe(() => {
+      const pairing = this.getPairingOrThrow();
+      const profiles = new Map(this.getProfilesOrThrow().map((profile) => [profile.agentId, profile]));
+      const usage = this.getUsage();
+      const wanted = memoryTerms(
+        [input.title, input.description, Array.isArray(input.needs) ? input.needs.join(" ") : undefined]
+          .filter((part): part is string => typeof part === "string" && part.length > 0)
+          .join(" "),
+      );
+
+      const candidates = pairing.members
+        .filter((agentId) => eligible.includes(agentId))
+        .map((agentId) => {
+          const profile = profiles.get(agentId);
+          const strengths = (profile?.strengths ?? []).map((entry) => entry.toLowerCase());
+          const strengthHits = wanted.filter((term) =>
+            strengths.some((strength) => strength.includes(term) || term.includes(strength)),
+          ).length;
+          return { agentId, model: profile?.model ?? null, strengthHits, tokensUsed: usage.byAgent[agentId]?.tokensUsed ?? 0 };
+        });
+
+      // Normalized so the load-balancing tiebreak can never outrank a real
+      // strength match: an idle teammate with the wrong model should not beat
+      // a busy one with the right one.
+      const busiest = Math.max(1, ...candidates.map((entry) => entry.tokensUsed));
+      const ranked = candidates
+        .map((entry) => ({ ...entry, score: entry.strengthHits * 10 + (1 - entry.tokensUsed / busiest) }))
+        .sort((a, b) => b.score - a.score || a.tokensUsed - b.tokensUsed || a.agentId.localeCompare(b.agentId));
+
+      const best = ranked[0];
+      if (!best) throw conflict(`Pairing "${pairing.id}" has no eligible members to take work`);
+
+      const why = best.strengthHits
+        ? `matches ${best.strengthHits} of the task's needs${best.model ? ` on ${best.model}` : ""}`
+        : `no declared strength matched, so this is the member with the most runway left${best.model ? ` (${best.model})` : ""}`;
+
+      return {
+        suggested: best.agentId,
+        rationale: `${best.agentId.replace(/^agent_/, "").slice(0, 8)} ${why}; ${best.tokensUsed.toLocaleString()} tokens spent so far.`,
+        candidates: ranked,
       };
     });
   }

@@ -13,6 +13,15 @@ async function pair(app: ReturnType<typeof createApp>) {
   };
 }
 
+/**
+ * Note for anyone who sees this file flake: an intermittent ETIMEDOUT here is
+ * loopback socket exhaustion in the dev environment, not the relay. Driving
+ * the store directly is deterministic (500/500 identical write+recall cycles),
+ * the failure surfaces inside supertest's socket layer rather than in any
+ * assertion, and it only appears after running the suite in a tight loop —
+ * which leaves hundreds of TIME_WAIT sockets behind. Wait for them to drain
+ * rather than raising the test timeout; the timeout is not the problem.
+ */
 function setup() {
   const store = new RelayStore();
   return { store, app: createApp(store, {}) };
@@ -23,10 +32,11 @@ describe("shared memory", () => {
     const { app, store } = setup();
     const { pairingId, a, b } = await pair(app);
 
-    await request(app)
+    const written = await request(app)
       .post(`/pairings/${pairingId}/memory`)
       .set(a.auth)
       .send({ key: "deploy target", body: "We deploy to Fly, not Render." });
+    expect(written.status, JSON.stringify(written.body)).toBe(201);
 
     const recalled = await request(app).get(`/pairings/${pairingId}/memory/recall?q=deploy`).set(b.auth);
     expect(recalled.status).toBe(200);
@@ -130,6 +140,26 @@ describe("shared memory", () => {
 
     const list = await request(app).get(`/pairings/${pairingId}/memory`).set(a.auth);
     expect(list.body.memories).toHaveLength(0);
+    store.close();
+  });
+});
+
+describe("recall ordering", () => {
+  it("is stable across identical calls when memories share a timestamp", async () => {
+    const { app, store } = setup();
+    const { pairingId, a } = await pair(app);
+    // Written back-to-back, so these very likely land in the same millisecond
+    // and tie on updated_at — the case that used to order arbitrarily.
+    for (const key of ["alpha", "bravo", "charlie", "delta"]) {
+      await request(app).post(`/pairings/${pairingId}/memory`).set(a.auth).send({ key, body: "shared subject matter" });
+    }
+
+    const first = await request(app).get(`/pairings/${pairingId}/memory/recall?q=subject`).set(a.auth);
+    const second = await request(app).get(`/pairings/${pairingId}/memory/recall?q=subject`).set(a.auth);
+    expect(first.body.memories).toHaveLength(4);
+    expect(second.body.memories.map((m: { key: string }) => m.key)).toEqual(
+      first.body.memories.map((m: { key: string }) => m.key),
+    );
     store.close();
   });
 });

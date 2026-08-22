@@ -300,6 +300,11 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json(
       {
         pairingId: joined.pairingId,
+        // The joiner's OWN id, under the same name packages/relay uses. The
+        // mcp-server reads `agentId` here and writes it straight into
+        // ~/.inzo/session.json; without it every joiner against this relay
+        // persisted `agentId: undefined`. agentA/agentB stay for back-compat.
+        agentId: joined.agentB,
         agentA: joined.agentA,
         agentB: joined.agentB,
         code: joined.code,
@@ -540,6 +545,88 @@ async function route(req: Request, env: Env): Promise<Response> {
   }
   if (sub === "usage" && req.method === "GET") {
     return json(await room.getUsageSnapshot());
+  }
+
+  if (sub === "profile" && req.method === "PUT") {
+    const profile = unwrap(await room.setProfile(auth.agentId, (rawBody ?? {}) as never));
+    return json({ profile });
+  }
+  if (sub === "profile" && req.method === "GET") {
+    return json({ profiles: unwrap(await room.getProfiles()) });
+  }
+
+  if (sub === "tasks" && req.method === "POST") {
+    const task = unwrap(await room.proposeTask(auth.agentId, (rawBody ?? {}) as never, actorFrom(auth), assuranceFrom(auth)));
+    return json({ task }, 201);
+  }
+  if (sub === "tasks" && req.method === "GET") {
+    return json({ tasks: unwrap(await room.getTasks()) });
+  }
+  if (parts[2] === "tasks" && parts[4] === "assign" && req.method === "PUT") {
+    const task = unwrap(
+      await room.assignTask(auth.agentId, parts[3], (rawBody ?? {}) as never, actorFrom(auth), assuranceFrom(auth)),
+    );
+    return json({ task });
+  }
+  if (parts[2] === "tasks" && parts[4] === "status" && req.method === "PUT") {
+    const { status } = (rawBody ?? {}) as { status?: unknown };
+    const task = unwrap(await room.updateTaskStatus(auth.agentId, parts[3], status, actorFrom(auth), assuranceFrom(auth)));
+    return json({ task });
+  }
+
+  // Shared memory. Read and write are separate capabilities on purpose: an
+  // agent that may learn from the team is not thereby entitled to plant
+  // things in what its teammate's agent will believe next turn.
+  if (sub === "memory/recall" && req.method === "GET") {
+    requireScope(auth, "memory:read");
+    const rawLimit = url.searchParams.get("limit");
+    const memories = unwrap(
+      await room.recall(auth.agentId, url.searchParams.get("q") ?? undefined, rawLimit === null ? undefined : Number(rawLimit)),
+    );
+    return json({ memories });
+  }
+  if (sub === "memory" && req.method === "POST") {
+    requireScope(auth, "memory:write");
+    const memory = unwrap(await room.remember(auth.agentId, (rawBody ?? {}) as never, actorFrom(auth), assuranceFrom(auth)));
+    return json({ memory }, 201);
+  }
+  if (sub === "memory" && req.method === "GET") {
+    requireScope(auth, "memory:read");
+    return json({ memories: unwrap(await room.listMemories(auth.agentId)) });
+  }
+  if (parts[2] === "memory" && parts.length === 4 && req.method === "DELETE") {
+    requireScope(auth, "memory:write");
+    return json(unwrap(await room.forget(auth.agentId, decodeURIComponent(parts[3]), actorFrom(auth), assuranceFrom(auth))));
+  }
+
+  // The roster. Whether a member's spend is visible is decided by THAT
+  // member's own credential (usage:share), which only the registry knows —
+  // so it is resolved here and handed to the DO, which holds no credentials.
+  if (sub === "team" && req.method === "GET") {
+    requireScope(auth, "messages:read");
+    const pairing = unwrap(await room.getPairing());
+    const shares: Record<string, boolean> = {};
+    const revoked: Record<string, boolean> = {};
+    for (const agentId of pairing.members) {
+      shares[agentId] = (await registry.getAgentScope(agentId)).includes("usage:share");
+      revoked[agentId] = await registry.isAgentRevoked(agentId);
+    }
+    const team = unwrap(await room.getTeam(auth.agentId, shares));
+    return json({
+      ...team,
+      members: team.members.map((member) => ({ ...member, revoked: revoked[member.agentId] === true })),
+    });
+  }
+
+  if (sub === "delegate" && req.method === "POST") {
+    requireScope(auth, "messages:read");
+    const pairing = unwrap(await room.getPairing());
+    // A revoked member cannot do the work, so it must never be suggested.
+    const eligible: string[] = [];
+    for (const agentId of pairing.members) {
+      if (!(await registry.isAgentRevoked(agentId))) eligible.push(agentId);
+    }
+    return json(unwrap(await room.suggestOwner((rawBody ?? {}) as never, eligible)));
   }
 
   // target: "self", "peer" (2-member pairings only), "all" (every other
