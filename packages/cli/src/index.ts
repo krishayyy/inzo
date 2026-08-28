@@ -6,6 +6,7 @@ import { done } from "./done.js";
 import { mode } from "./mode.js";
 import { isUsageError, join, start } from "./start.js";
 import { sync } from "./sync.js";
+import { tokens } from "./tokens.js";
 import { sessionFilePath } from "./session.js";
 import { style } from "./render.js";
 
@@ -21,6 +22,7 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo sync                  pull --rebase --autostash, then push. Never --force.
   inzo done                  sync, then open a PR from the session branch
   inzo doctor                check git, Docker, gh, the relay, and this session
+  inzo tokens                what Inzo costs in tokens, against what it saves
   inzo pair                  create a pairing code and wire up .mcp.json here
   inzo pair <code>           join a pairing code a teammate shared with you
   inzo pair --invite <n>     invite <n> more teammates into your active pairing
@@ -65,6 +67,7 @@ const COMMANDS = [
   "sync",
   "done",
   "doctor",
+  "tokens",
   "pair",
   "watch",
   "status",
@@ -122,6 +125,9 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     case "doctor":
       return await doctor(rest);
+    case "tokens":
+      await tokens(rest);
+      return 0;
     case "pair": {
       if (rest[0] === "--invite") {
         const count = Number(rest[1]);

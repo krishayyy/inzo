@@ -8,6 +8,7 @@
  */
 import {
   InvalidSessionDescriptorError,
+  validateContextInput,
   validatePresence,
   validateSessionDescriptor,
   type SessionDescriptor,
@@ -512,6 +513,29 @@ async function route(req: Request, env: Env): Promise<Response> {
       throw err;
     }
     return json({ presence: unwrap(await room.setPresence(auth.agentId, presence)) });
+  }
+
+  // The shared context ledger (T-7). Rides on messages:read/messages:send
+  // rather than scopes of its own: a summary is a message about a file.
+  if (sub === "context" && req.method === "GET") {
+    requireScope(auth, "messages:read");
+    const path = url.searchParams.get("path");
+    const sha = url.searchParams.get("sha");
+    if (path === null || sha === null) throw badRequest("path and sha query parameters are required");
+    return json(unwrap(await room.getContext(auth.agentId, path, sha)));
+  }
+
+  if (sub === "context" && req.method === "POST") {
+    requireScope(auth, "messages:send");
+    const { context: posted } = (rawBody ?? {}) as { context?: unknown };
+    let input;
+    try {
+      input = validateContextInput(posted);
+    } catch (err) {
+      if (err instanceof InvalidSessionDescriptorError) throw badRequest(err.message);
+      throw err;
+    }
+    return json({ context: unwrap(await room.putContext(auth.agentId, input)) });
   }
 
   if (sub === "session" && req.method === "GET") {

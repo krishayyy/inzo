@@ -10,10 +10,16 @@ import { planSubjectHash, type ConsentRecord } from "./consent.js";
 import { beginPlanWait, type WaitHandle } from "./agentrun.js";
 import type { Jwk } from "./credential.js";
 import {
+  contextKey,
   modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
+  MAX_LEDGER_BYTES,
+  MAX_LEDGER_ENTRIES,
   PRESENCE_TTL_MS,
+  type ContextEntry,
+  type ContextInput,
+  type LedgerStats,
   type Presence,
   type SessionDescriptor,
 } from "inzo-protocol";
@@ -738,6 +744,87 @@ export class RelayStore {
     }
     if (room.size === 0) this.presence.delete(pairingId);
     return [...room.values()];
+  }
+
+  // ---------------------------------------------------------------------
+  // Shared context ledger (T-7)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Per pairing, in memory, LRU, and hard-capped.
+   *
+   * In memory because it is a cache: every entry is reconstructible by
+   * re-reading the file, so losing it on restart costs tokens, never
+   * correctness. Capped because an unbounded ledger is a memory leak with a
+   * helpful name, and a Map preserves insertion order, which is all an LRU
+   * needs — re-inserting on read moves an entry to the end.
+   */
+  private readonly ledger = new Map<string, Map<string, ContextEntry>>();
+  private readonly ledgerBytes = new Map<string, number>();
+  private readonly ledgerHits = new Map<string, { hits: number; misses: number }>();
+
+  putContext(pairingId: string, agentId: string, input: ContextInput): ContextEntry {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, agentId);
+
+    const entry: ContextEntry = { ...input, agentId, at: new Date().toISOString() };
+    const key = contextKey(input.path, input.sha);
+
+    let room = this.ledger.get(pairingId);
+    if (!room) {
+      room = new Map();
+      this.ledger.set(pairingId, room);
+      this.ledgerBytes.set(pairingId, 0);
+    }
+
+    const replacing = room.get(key);
+    if (replacing) this.ledgerBytes.set(pairingId, (this.ledgerBytes.get(pairingId) ?? 0) - replacing.summary.length);
+    room.delete(key);
+    room.set(key, entry);
+    this.ledgerBytes.set(pairingId, (this.ledgerBytes.get(pairingId) ?? 0) + entry.summary.length);
+
+    // Evict oldest-first until both caps hold.
+    while (room.size > MAX_LEDGER_ENTRIES || (this.ledgerBytes.get(pairingId) ?? 0) > MAX_LEDGER_BYTES) {
+      const oldest = room.keys().next();
+      if (oldest.done) break;
+      const dropped = room.get(oldest.value)!;
+      room.delete(oldest.value);
+      this.ledgerBytes.set(pairingId, (this.ledgerBytes.get(pairingId) ?? 0) - dropped.summary.length);
+    }
+    return entry;
+  }
+
+  /**
+   * Returns an entry only when the sha matches.
+   *
+   * A summary keyed by content that has since changed describes code that no
+   * longer exists, and handing it back would be worse than a miss — the agent
+   * would act on it confidently. So a stale key is simply a miss.
+   */
+  getContext(pairingId: string, agentId: string, path: string, sha: string): ContextEntry | null {
+    this.assertMember(this.getPairing(pairingId), agentId);
+    const room = this.ledger.get(pairingId);
+    const entry = room?.get(contextKey(path, sha));
+    const counts = this.ledgerHits.get(pairingId) ?? { hits: 0, misses: 0 };
+    if (!entry || !room) {
+      this.ledgerHits.set(pairingId, { ...counts, misses: counts.misses + 1 });
+      return null;
+    }
+    this.ledgerHits.set(pairingId, { ...counts, hits: counts.hits + 1 });
+    // Touch: re-insertion moves it to the end of the LRU order.
+    room.delete(contextKey(path, sha));
+    room.set(contextKey(path, sha), entry);
+    return entry;
+  }
+
+  /** What the ledger holds and has done, for `inzo tokens`. */
+  contextStats(pairingId: string): LedgerStats {
+    const counts = this.ledgerHits.get(pairingId) ?? { hits: 0, misses: 0 };
+    return {
+      entries: this.ledger.get(pairingId)?.size ?? 0,
+      bytes: this.ledgerBytes.get(pairingId) ?? 0,
+      ...counts,
+    };
   }
 
   /** Full membership of a pairing, in join order. */

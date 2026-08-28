@@ -8,6 +8,7 @@ import { budgetRouter } from "./routes/budget.js";
 import { digestRouter } from "./routes/digest.js";
 import { messagesRouter } from "./routes/messages.js";
 import { pairingsRouter } from "./routes/pairings.js";
+import { contextRouter } from "./routes/context.js";
 import { planRouter } from "./routes/plan.js";
 import { presenceRouter } from "./routes/presence.js";
 import { sessionRouter } from "./routes/session.js";
@@ -91,6 +92,7 @@ export function createApp(store: RelayStore, options: AppOptions = {}) {
   app.use("/pairings/:id/plan", requireAuth(store), planRouter(store));
   app.use("/pairings/:id/session", requireAuth(store), sessionRouter(store));
   app.use("/pairings/:id/presence", requireAuth(store), presenceRouter(store));
+  app.use("/pairings/:id/context", requireAuth(store), contextRouter(store));
   app.use("/pairings/:id/consent", requireAuth(store), consentRouter(store));
   app.use("/pairings/:id/audit", requireAuth(store), auditRouter(store));
   app.use("/pairings/:id/budget", requireAuth(store), budgetRouter(store));

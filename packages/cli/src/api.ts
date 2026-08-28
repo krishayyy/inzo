@@ -1,5 +1,5 @@
 import { buildAuthHeaders } from "inzo-holder";
-import type { Presence, SessionDescriptor } from "inzo-protocol";
+import type { ContextEntry, LedgerStats, Presence, SessionDescriptor } from "inzo-protocol";
 import type { SessionFile } from "./session.js";
 
 export interface ConsentRecord {
@@ -178,6 +178,11 @@ export function createApi(session: SessionFile) {
       ),
     session: (pairingId: string) => call<{ session: SessionDescriptor | null }>("GET", `/pairings/${pairingId}/session`),
     presence: (pairingId: string) => call<{ presence: PresenceEntry[] }>("GET", `/pairings/${pairingId}/presence`),
+    context: (pairingId: string, path: string, sha: string) =>
+      call<{ context: ContextEntry | null; stats: LedgerStats }>(
+        "GET",
+        `/pairings/${pairingId}/context?${new URLSearchParams({ path, sha })}`,
+      ),
     setPresence: (pairingId: string, presence: Presence) =>
       call<{ presence: PresenceEntry }>("POST", `/pairings/${pairingId}/presence`, { presence }),
     setSession: (pairingId: string, session: SessionDescriptor) =>

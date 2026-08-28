@@ -16,10 +16,16 @@
  * throw/catch semantics; the `OrThrow` suffix marks those.
  */
 import {
+  contextKey,
   modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
+  MAX_LEDGER_BYTES,
+  MAX_LEDGER_ENTRIES,
   PRESENCE_TTL_MS,
+  type ContextEntry,
+  type ContextInput,
+  type LedgerStats,
   type Presence,
   type SessionDescriptor,
 } from "inzo-protocol";
@@ -417,6 +423,67 @@ export class PairingRoom extends DurableObject<Env> {
         if (Date.parse(entry.at) < cutoff) this.presence.delete(member);
       }
       return [...this.presence.values()];
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Shared context ledger (T-7)
+  // ---------------------------------------------------------------------
+
+  /**
+   * Instance memory, LRU, hard-capped — see the Express relay's note for why
+   * a cache belongs in memory. A Map preserves insertion order, which is all
+   * an LRU needs: re-inserting on read moves an entry to the end.
+   */
+  private readonly ledger = new Map<string, ContextEntry>();
+  private ledgerBytes = 0;
+  private ledgerHits = 0;
+  private ledgerMisses = 0;
+
+  putContext(agentId: string, input: ContextInput): RpcResult<ContextEntry> {
+    return rpcSafe(() => {
+      this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
+      const entry: ContextEntry = { ...input, agentId, at: new Date().toISOString() };
+      const key = contextKey(input.path, input.sha);
+
+      const replacing = this.ledger.get(key);
+      if (replacing) this.ledgerBytes -= replacing.summary.length;
+      this.ledger.delete(key);
+      this.ledger.set(key, entry);
+      this.ledgerBytes += entry.summary.length;
+
+      while (this.ledger.size > MAX_LEDGER_ENTRIES || this.ledgerBytes > MAX_LEDGER_BYTES) {
+        const oldest = this.ledger.keys().next();
+        if (oldest.done) break;
+        this.ledgerBytes -= this.ledger.get(oldest.value)!.summary.length;
+        this.ledger.delete(oldest.value);
+      }
+      return entry;
+    });
+  }
+
+  /**
+   * A hit only on an exact `path@sha` match. A summary of content that has
+   * since changed describes code that no longer exists, and returning it
+   * would be worse than a miss — the agent would act on it confidently.
+   */
+  getContext(agentId: string, path: string, sha: string): RpcResult<{ context: ContextEntry | null; stats: LedgerStats }> {
+    return rpcSafe(() => {
+      this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
+      const key = contextKey(path, sha);
+      const entry = this.ledger.get(key) ?? null;
+      if (entry) {
+        this.ledgerHits++;
+        // Touch: re-insertion moves it to the end of the LRU order.
+        this.ledger.delete(key);
+        this.ledger.set(key, entry);
+      } else {
+        this.ledgerMisses++;
+      }
+      return {
+        context: entry,
+        stats: { entries: this.ledger.size, bytes: this.ledgerBytes, hits: this.ledgerHits, misses: this.ledgerMisses },
+      };
     });
   }
 

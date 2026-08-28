@@ -486,5 +486,95 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
       });
     });
 
+
+    describe("shared context ledger (T-7)", () => {
+      const ENTRY = { path: "src/api.ts", sha: "a1b2c3d4e5f", summary: "Express router. Exports createApi()." };
+
+      it("misses before anything is published, and hits after", async () => {
+        const client = await makeClient();
+        const { pairingId, a, b } = await pair(client, { mode: "cowork", repo: null });
+
+        const miss = await client.get(`/pairings/${pairingId}/context?path=${ENTRY.path}&sha=${ENTRY.sha}`, b.auth);
+        expect(miss.status).toBe(200);
+        expect(miss.body.context).toBeNull();
+
+        const put = await client.post(`/pairings/${pairingId}/context`, { context: ENTRY }, a.auth);
+        expect(put.status).toBe(200);
+        expect(put.body.context).toMatchObject({ ...ENTRY, agentId: a.agentId });
+
+        // The whole point: B reads A's summary instead of the file.
+        const hit = await client.get(`/pairings/${pairingId}/context?path=${ENTRY.path}&sha=${ENTRY.sha}`, b.auth);
+        expect(hit.body.context.summary).toBe(ENTRY.summary);
+        expect(hit.body.context.agentId).toBe(a.agentId);
+      });
+
+      it("misses once the file changes, because the sha is the key", async () => {
+        // This is the entire cache-coherence story: a summary is bound to the
+        // exact bytes it describes, so a stale entry cannot be served at all.
+        const client = await makeClient();
+        const { pairingId, a, b } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/context`, { context: ENTRY }, a.auth);
+
+        const afterEdit = await client.get(`/pairings/${pairingId}/context?path=${ENTRY.path}&sha=ffffff9`, b.auth);
+        expect(afterEdit.body.context).toBeNull();
+      });
+
+      it("does not serve one file's summary for another path", async () => {
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/context`, { context: ENTRY }, a.auth);
+
+        const other = await client.get(`/pairings/${pairingId}/context?path=src/other.ts&sha=${ENTRY.sha}`, a.auth);
+        expect(other.body.context).toBeNull();
+      });
+
+      it("replaces an entry rather than duplicating it", async () => {
+        const client = await makeClient();
+        const { pairingId, a, b } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/context`, { context: ENTRY }, a.auth);
+        await client.post(`/pairings/${pairingId}/context`, { context: { ...ENTRY, summary: "Revised." } }, b.auth);
+
+        const hit = await client.get(`/pairings/${pairingId}/context?path=${ENTRY.path}&sha=${ENTRY.sha}`, a.auth);
+        expect(hit.body.context.summary).toBe("Revised.");
+        expect(hit.body.stats.entries).toBe(1);
+      });
+
+      it("requires authentication", async () => {
+        const client = await makeClient();
+        const { pairingId } = await pair(client, { mode: "cowork", repo: null });
+        expect((await client.get(`/pairings/${pairingId}/context?path=a&sha=abcdef1`)).status).toBe(401);
+        expect((await client.post(`/pairings/${pairingId}/context`, { context: ENTRY })).status).toBe(401);
+      });
+
+      it("requires both path and sha to read", async () => {
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+        expect((await client.get(`/pairings/${pairingId}/context?path=src/api.ts`, a.auth)).status).toBe(400);
+        expect((await client.get(`/pairings/${pairingId}/context?sha=a1b2c3d`, a.auth)).status).toBe(400);
+      });
+
+      describe("rejects malformed entries identically", () => {
+        const BAD: Array<[string, unknown]> = [
+          ["a missing path", { sha: "a1b2c3d", summary: "x" }],
+          ["an absolute path", { path: "/etc/passwd", sha: "a1b2c3d", summary: "x" }],
+          ["a traversing path", { path: "../../.ssh/id_rsa", sha: "a1b2c3d", summary: "x" }],
+          ["a non-hex sha", { path: "a.ts", sha: "not-a-sha", summary: "x" }],
+          ["an empty summary", { path: "a.ts", sha: "a1b2c3d", summary: "" }],
+          // A pasted file is exactly what the ledger exists to avoid paying for.
+          ["a summary over the cap", { path: "a.ts", sha: "a1b2c3d", summary: "x".repeat(4001) }],
+          ["a non-object entry", "src/api.ts"],
+        ];
+
+        for (const [why, context] of BAD) {
+          it(`rejects ${why}`, async () => {
+            const client = await makeClient();
+            const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+            const res = await client.post(`/pairings/${pairingId}/context`, { context }, a.auth);
+            expect(res.status).toBe(400);
+          });
+        }
+      });
+    });
+
   });
 }

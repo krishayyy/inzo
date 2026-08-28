@@ -142,7 +142,7 @@ export function registerTools(server: McpServer): void {
     "get_session",
     {
       description:
-        "Where the team is: mode, repo, branch, members, plan, playbook. Call after any gap.",
+        "Where the team is: mode, repo, branch, members, plan, playbook.",
       inputSchema: {},
     },
     async () => {
@@ -178,6 +178,18 @@ export function registerTools(server: McpServer): void {
     async ({ text }) => {
       try {
         const { message } = await relayClient.sendMessage(requirePairingId(), await auth(), text);
+        // T-4. Agent-to-agent chatter is billed twice — once to write, once
+        // for each peer to read — so a pasted file is the most expensive
+        // thing that can go through here, and the peer already has it on
+        // disk. A warning, not a refusal: sometimes the paste is the point.
+        if (text.length > 2048) {
+          return textResult({
+            ...message,
+            warning:
+              `That message was ${Math.round(text.length / 1024)}KB, and every member pays to read it. ` +
+              "Reference code as path@sha and let them read their own clone; use shared_context for a summary worth sharing.",
+          });
+        }
         return textResult(message);
       } catch (err) {
         return errorResult(err);
@@ -189,7 +201,7 @@ export function registerTools(server: McpServer): void {
     "get_digest",
     {
       description:
-        "Catch up: plan, consent, runway, recent messages. full:true returns the whole thread instead.",
+        "Catch up: plan, consent, runway, messages. full:true for the whole thread.",
       inputSchema: { limit: z.number().optional(), full: z.boolean().optional() },
     },
     async ({ limit, full }) => {
@@ -210,7 +222,7 @@ export function registerTools(server: McpServer): void {
       "propose_plan",
       {
         description:
-          "Propose a goal and task split. Owners are member agentIds; dependsOn holds earlier indices. Re-proposing resets approvals.",
+          "Propose a goal and task split.",
         inputSchema: {
           goal: z.string(),
           tasks: z
@@ -241,7 +253,7 @@ export function registerTools(server: McpServer): void {
       "approve_plan",
       {
         description:
-          "Record the human's approval of a plan version. Their act, never yours — see the playbook.",
+          "Record the human's approval of a plan version. Their act, never yours.",
         inputSchema: { planVersion: z.number() },
       },
       async ({ planVersion }) => {
@@ -283,13 +295,53 @@ export function registerTools(server: McpServer): void {
     ),
   );
 
+  /**
+   * The shared context ledger (T-7) — one tool, not two, because a second
+   * tool definition costs tokens on every request forever and the read and
+   * the write are the same idea from opposite ends.
+   *
+   * Resident in every mode: this is the tool that pays for the rest of Inzo,
+   * and it is most valuable in `research`, where reading is all that happens.
+   */
+  server.registerTool(
+    "shared_context",
+    {
+      description:
+        "What a teammate already learned about a file, for a fraction of reading it. path+sha reads, add summary to publish. sha is `git hash-object <path>`.",
+      inputSchema: {
+        path: z.string(),
+        sha: z.string(),
+        summary: z.string().optional(),
+      },
+    },
+    async ({ path, sha, summary }) => {
+      try {
+        const pairingId = requirePairingId();
+        const token = await auth();
+        if (summary === undefined) {
+          const { context, stats } = await relayClient.getContext(pairingId, token, path, sha);
+          if (context) return textResult({ hit: true, ...context });
+          return textResult({
+            hit: false,
+            message: "Nobody has summarized this exact content yet. Read it, then call this again with a summary.",
+            ledger: stats,
+          });
+        }
+        const { context } = await relayClient.putContext(pairingId, token, { path, sha, summary });
+        return textResult({ published: true, path: context.path, sha: context.sha });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
   gated.set(
     "update_item_status",
     server.registerTool(
       "update_item_status",
       {
         description:
-          "Mark progress on an item you own. Never touches the plan version or consent.",
+          "Mark progress on an item you own.",
         inputSchema: {
           itemIndex: z.number(),
           status: z.enum(["pending", "in_progress", "done"]),
@@ -312,14 +364,11 @@ export function registerTools(server: McpServer): void {
       "run_shared_command",
       {
         description:
-          "Run a command in a Docker sandbox over INZO_WORKSPACE; itemIndex required in build mode. No host path; refused without Docker.",
+          "Run a command in a Docker sandbox over INZO_WORKSPACE.",
         inputSchema: {
           command: z.string(),
           args: z.array(z.string()).optional(),
-          origin: z
-            .string()
-            .default("peer")
-            .describe("'self', 'peer', or a member agentId"),
+          origin: z.string().default("peer"),
           itemIndex: z.number().optional(),
           timeoutSeconds: z.number().optional(),
         },
@@ -491,7 +540,7 @@ function registerAdmin(server: McpServer): void {
     "inzo_admin",
     {
       description:
-        "Off the hot path; args go in `params`. Start with create_pairing, or join {code}. Errors name any missing field.",
+        "Off the hot path; args in `params`.",
       inputSchema: {
         action: z.enum(ADMIN_ACTIONS),
         params: z.record(z.string(), z.unknown()).optional(),

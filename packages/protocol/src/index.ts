@@ -361,3 +361,88 @@ export function overlappingPaths(entries: Array<{ dirty: string[] }>): string[] 
     .map(([path]) => path)
     .sort();
 }
+
+// ---------------------------------------------------------------------------
+// Shared context ledger (T-7)
+// ---------------------------------------------------------------------------
+
+/**
+ * One agent's understanding of one file, shared with the others.
+ *
+ * This is the primitive that exists *because* two agents are coordinating,
+ * and it is where the waste that pairing creates gets recovered. Two agents on
+ * one repo otherwise each burn ~4,000 tokens reading `src/api.ts` to reach the
+ * same understanding. Here the first one to read it publishes ~200 tokens of
+ * summary and the second reads that instead.
+ *
+ * **Keyed by `path@blob-sha`, and that is the whole cache-coherence story.**
+ * A summary is bound to the exact bytes it describes, so the moment the file
+ * changes the key changes and the stale entry simply stops matching. There is
+ * no invalidation to get wrong, no TTL to tune, and no way to serve a summary
+ * of code that no longer exists.
+ */
+export interface ContextEntry {
+  /** Repo-relative path, for humans and for lookup. */
+  path: string;
+  /** `git hash-object` of the exact content summarized. */
+  sha: string;
+  summary: string;
+  /** Which member wrote it — a summary is one agent's reading, not a fact. */
+  agentId: string;
+  at: string;
+}
+
+/** Hard caps. An unbounded ledger is a memory leak with a helpful name. */
+export const MAX_LEDGER_ENTRIES = 500;
+export const MAX_LEDGER_BYTES = 256 * 1024;
+export const MAX_SUMMARY_LENGTH = 4000;
+
+export interface ContextInput {
+  path: string;
+  sha: string;
+  summary: string;
+}
+
+export function validateContextInput(input: unknown): ContextInput {
+  if (!isPlainObject(input)) fail("context must be an object");
+
+  const path = input.path;
+  if (typeof path !== "string" || path.length === 0) fail("context.path must be a non-empty string");
+  if (path.length > MAX_PATH_LENGTH) fail(`context.path must be at most ${MAX_PATH_LENGTH} characters`);
+  if (CONTROL_CHARS.test(path)) fail("context.path must not contain control characters");
+  // A ledger path is a label, never opened by anyone — but it is echoed back
+  // to other agents, and an absolute or traversing path invites one of them
+  // to treat it as a filesystem instruction.
+  if (path.startsWith("/") || path.includes("..")) fail("context.path must be repo-relative and must not contain '..'");
+
+  const sha = input.sha;
+  if (typeof sha !== "string" || !/^[0-9a-f]{7,64}$/.test(sha)) fail("context.sha must be a hex object id");
+
+  const summary = input.summary;
+  if (typeof summary !== "string" || summary.length === 0) fail("context.summary must be a non-empty string");
+  if (summary.length > MAX_SUMMARY_LENGTH) {
+    fail(`context.summary must be at most ${MAX_SUMMARY_LENGTH} characters — summarize, do not paste the file`);
+  }
+
+  return { path, sha, summary };
+}
+
+/**
+ * What the ledger has actually done, for `inzo tokens`.
+ *
+ * `hits` and `misses` are counted rather than inferred because the whole point
+ * of `inzo tokens` is to make the token-negative claim falsifiable, and a
+ * "saving" derived from entries *written* would be measuring the wrong thing —
+ * a summary nobody reads saves nothing.
+ */
+export interface LedgerStats {
+  entries: number;
+  bytes: number;
+  hits: number;
+  misses: number;
+}
+
+/** The ledger key. Two files with the same content share one entry, correctly. */
+export function contextKey(path: string, sha: string): string {
+  return `${path}@${sha}`;
+}
