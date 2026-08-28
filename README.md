@@ -217,6 +217,32 @@ unstructured default for "just work with me". `inzo mode` is human-only and is
 deliberately not an MCP tool: an agent should not be able to change the rules
 it operates under.
 
+### Quota, and what Inzo costs
+
+```bash
+npx inzo capacity --window 5h --used 62% --resets 15:40
+npx inzo tokens
+```
+
+Two hours into pairing, one member's rolling window runs dry and the work
+stops. `capacity` puts everyone's remaining quota in the watch panel so you see
+it coming — N windows, each a used-fraction and a reset time, with no vendor
+named anywhere in the schema. A provider we know nothing about reports no
+windows and the feature stays quiet rather than guessing, and an estimate is
+always labelled as one.
+
+`tokens` reports what Inzo costs against what it saves. Inzo is meant to be
+token-*negative*: two agents pairing is structurally wasteful — both build the
+same context over the same code — and the shared context ledger is where that
+waste gets recovered. When one agent reads `src/api.ts` it publishes a short
+summary keyed by `path@blob-sha`; the other reads that instead of the file. The
+sha keying is the whole cache story: edit the file and the key changes, so a
+stale summary can never be served.
+
+Overhead is measured exactly, savings are modelled, and `tokens` says which is
+which. It reports negative when nobody uses the ledger, because a number that
+cannot embarrass us is not worth printing.
+
 ### When something's wrong
 
 ```bash
@@ -225,8 +251,17 @@ npx inzo doctor
 
 Checks Node, git, Docker, and `gh`, whether the relay answers, whether your
 session file is still mode `0600` (it holds the key that signs your approvals),
-and whether `.mcp.json` points at the directory you are actually in. Exits `1`
+whether `.mcp.json` points at the directory you are actually in, and whether its
+pinned `inzo-mcp` version matches the CLI. That last one catches the update that
+looks like it worked: the CLI is current, the config is valid, and your agent is
+still running last month's MCP server because nothing moved the pin. Exits `1`
 if anything required is broken. It only ever reads.
+
+Relays advertise a minimum client version, so a client too old for a session is
+refused at `join` with an upgrade message instead of silently disagreeing about
+the protocol — and what two clients could disagree about is what a human
+approved. `INZO_NO_UPDATE_CHECK=1` silences the update notice; it never runs off
+a TTY, so CI is quiet by default.
 
 `inzo pair` / `pair <code>` still work as aliases for `start` / `join`.
 

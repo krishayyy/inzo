@@ -29,6 +29,8 @@ import {
   type JoinPairingResponse,
 } from "./pair.js";
 import { style } from "./render.js";
+import { assertClientSupported, rewriteMcpPin } from "./update.js";
+import { MCP_VERSION, VERSION } from "./version.js";
 import { loadSession, resolveWorkspace } from "./session.js";
 import { postPresence } from "./sync.js";
 
@@ -190,13 +192,13 @@ export function mcpConfigBlock(workspace: string, format: "json" | "toml"): stri
     return [
       "[mcp_servers.inzo]",
       'command = "npx"',
-      'args = ["-y", "inzo-mcp"]',
+      `args = ["-y", "inzo-mcp@${MCP_VERSION}"]`,
       `env = { INZO_WORKSPACE = ${JSON.stringify(workspace)} }`,
       "",
     ].join("\n");
   }
   return `${JSON.stringify(
-    { mcpServers: { inzo: { command: "npx", args: ["-y", "inzo-mcp"], env: { INZO_WORKSPACE: workspace } } } },
+    { mcpServers: { inzo: { command: "npx", args: ["-y", `inzo-mcp@${MCP_VERSION}`], env: { INZO_WORKSPACE: workspace } } } },
     null,
     2,
   )}\n`;
@@ -279,6 +281,9 @@ export async function start(argv: string[]): Promise<void> {
     cnf: { jwk: holder.publicJwk },
     session: descriptor,
   });
+  // Before anything is written: a client too old for this relay is refused
+  // outright rather than left to disagree subtly about the protocol (U-3).
+  assertClientSupported(created.minClientVersion, VERSION);
   const sessionPath = writeSession({
     pairingId: null,
     agentId: created.agentId,
@@ -290,6 +295,7 @@ export async function start(argv: string[]): Promise<void> {
     session: descriptor,
   });
   const mcpConfigPath = mergeMcpConfig(workspace);
+  rewriteMcpPin(workspace, MCP_VERSION);
   const secrets = await secretShapedFiles(workspace);
 
   if (flags.json) {
@@ -394,6 +400,7 @@ export async function join(argv: string[]): Promise<void> {
   const joined = await relayPost<JoinPairingResponse>(`/pairings/${encodeURIComponent(flags.code)}/join`, {
     cnf: { jwk: holder.publicJwk },
   });
+  assertClientSupported(joined.minClientVersion, VERSION);
   const descriptor: SessionDescriptor = joined.session ?? { mode: DEFAULT_SESSION_MODE, repo: null };
 
   const parent = resolve(flags.dir ?? process.cwd());
@@ -411,6 +418,7 @@ export async function join(argv: string[]): Promise<void> {
     session: descriptor,
   });
   const mcpConfigPath = mergeMcpConfig(workspace);
+  rewriteMcpPin(workspace, MCP_VERSION);
   const secrets = await secretShapedFiles(workspace);
 
   if (flags.json) {

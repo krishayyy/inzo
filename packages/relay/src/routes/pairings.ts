@@ -3,7 +3,12 @@ import { requireAuth } from "../lib/auth.js";
 import { badRequest, rateLimited, RelayError } from "../lib/errors.js";
 import { FailureLimiter } from "../lib/rateLimit.js";
 import { parseCnf } from "../lib/credential.js";
-import { InvalidSessionDescriptorError, validateSessionDescriptor } from "inzo-protocol";
+import {
+  InvalidSessionDescriptorError,
+  MIN_CLIENT_VERSION,
+  PROTOCOL_VERSION,
+  validateSessionDescriptor,
+} from "inzo-protocol";
 import type { RelayStore } from "../lib/store.js";
 
 export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()): Router {
@@ -40,6 +45,10 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
       cap: pairingCode.scope,
       pairingId: null,
       session: pairingCode.session,
+      // Advertised on every entry point, so a client learns it is too old
+      // before it acts rather than after it misbehaves (§9 U-3).
+      minClientVersion: MIN_CLIENT_VERSION,
+      protocolVersion: PROTOCOL_VERSION,
     });
   });
 
@@ -71,6 +80,8 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
         peerAgentId: pairing.peerAgentId,
         members: pairing.members,
         session: pairing.session,
+        minClientVersion: MIN_CLIENT_VERSION,
+        protocolVersion: PROTOCOL_VERSION,
       });
     } catch (err) {
       if (err instanceof RelayError && [404, 409, 410].includes(err.status)) limiter.recordFailure(key);
@@ -108,6 +119,8 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
         members: pairing.members,
         approvalPolicy: pairing.approvalPolicy,
         session: pairing.session,
+        minClientVersion: MIN_CLIENT_VERSION,
+        protocolVersion: PROTOCOL_VERSION,
         peerAgentId,
         createdAt: pairing.createdAt,
         budget: store.getBudget(pairing.id),

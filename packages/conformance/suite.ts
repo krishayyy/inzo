@@ -649,5 +649,31 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
       });
     });
 
+
+    describe("version negotiation (§9 U-3)", () => {
+      it("advertises the minimum client version on create and on join", async () => {
+        // A client learns it is too old at the entry point, before it acts,
+        // rather than after it starts behaving strangely. Both relays must
+        // say so — a client that trusts one and not the other is exactly the
+        // silent disagreement this exists to prevent.
+        const client = await makeClient();
+        const created = await client.post("/pairings", {});
+        expect(typeof created.body.minClientVersion).toBe("string");
+        expect(created.body.protocolVersion).toBe(3);
+
+        const joined = await client.post(`/pairings/${created.body.code}/join`, {});
+        expect(joined.body.minClientVersion).toBe(created.body.minClientVersion);
+        expect(joined.body.protocolVersion).toBe(3);
+      });
+
+      it("advertises a version this build's own client satisfies", async () => {
+        // A relay whose minimum excludes the CLI shipped alongside it would
+        // lock every user out on the first join.
+        const client = await makeClient();
+        const created = await client.post("/pairings", {});
+        expect(created.body.minClientVersion).toMatch(/^\d+\.\d+\.\d+$/);
+      });
+    });
+
   });
 }

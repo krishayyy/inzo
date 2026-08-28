@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { readCapacity } from "./capacity.js";
+import { MCP_VERSION, VERSION } from "./version.js";
 import { RELAY_URL } from "./pair.js";
 import { style } from "./render.js";
 import { resolveWorkspace, sessionFilePath } from "./session.js";
@@ -66,6 +67,8 @@ export function atLeast(found: [number, number, number] | null, min: [number, nu
 export async function runChecks(): Promise<Check[]> {
   const checks: Check[] = [];
   const workspace = resolveWorkspace();
+
+  checks.push({ name: "inzo", ok: true, required: false, detail: `${VERSION} (mcp server pinned at ${MCP_VERSION})` });
 
   const node = parseSemver(process.version);
   checks.push({
@@ -197,7 +200,9 @@ function mcpConfigCheck(workspace: string): Check {
     return { name: ".mcp.json", ok: false, required: false, detail: `none in ${workspace} — your agent will not see Inzo` };
   }
   try {
-    const config = JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, { env?: Record<string, string> }> };
+    const config = JSON.parse(readFileSync(path, "utf8")) as {
+      mcpServers?: Record<string, { args?: string[]; env?: Record<string, string> }>;
+    };
     const inzo = config.mcpServers?.inzo;
     if (!inzo) return { name: ".mcp.json", ok: false, required: false, detail: `${path} has no "inzo" server` };
     const declared = inzo.env?.INZO_WORKSPACE;
@@ -209,6 +214,18 @@ function mcpConfigCheck(workspace: string): Check {
         ok: false,
         required: true,
         detail: `${path} points INZO_WORKSPACE at ${declared}, not ${workspace}`,
+      };
+    }
+    // U-3: the update that looks like it worked. The CLI is current, the
+    // config is valid, and the agent is still running an old MCP server
+    // because nothing moved the pin.
+    const pinned = inzo.args?.find((arg) => arg.startsWith("inzo-mcp@"))?.slice("inzo-mcp@".length);
+    if (pinned && pinned !== MCP_VERSION) {
+      return {
+        name: ".mcp.json",
+        ok: false,
+        required: false,
+        detail: `${path} pins inzo-mcp@${pinned}, but this CLI ships ${MCP_VERSION} — run \`inzo start\` here to rewrite it`,
       };
     }
     return { name: ".mcp.json", ok: true, required: false, detail: path };

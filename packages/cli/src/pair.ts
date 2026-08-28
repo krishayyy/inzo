@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { generateHolderKeyPair, sessionFilePathFor, writeCurrentPointer } from "inzo-holder";
 import type { SessionDescriptor } from "inzo-protocol";
 import { createApi } from "./api.js";
+import { MCP_VERSION } from "./version.js";
 import { style } from "./render.js";
 import { loadSession, requirePairing, resolveWorkspace, type SessionFile } from "./session.js";
 
@@ -22,6 +23,8 @@ export interface CreatePairingResponse {
   principalId: string | null;
   credential: string | null;
   session?: SessionDescriptor | null;
+  /** Absent from a relay that predates version negotiation (§9 U-3). */
+  minClientVersion?: string | null;
 }
 
 export interface JoinPairingResponse {
@@ -33,6 +36,7 @@ export interface JoinPairingResponse {
   principalId: string | null;
   credential: string | null;
   session?: SessionDescriptor | null;
+  minClientVersion?: string | null;
 }
 
 export async function relayPost<T>(path: string, body: unknown): Promise<T> {
@@ -100,7 +104,9 @@ export function mergeMcpConfig(dir = process.cwd()): string {
   config.mcpServers ??= {};
   config.mcpServers.inzo = {
     command: "npx",
-    args: ["-y", "inzo-mcp"],
+    // Pinned, not floating: a session's CLI and MCP server are two independently
+    // published packages, and they need to be known to agree (§9 U-3).
+    args: ["-y", `inzo-mcp@${MCP_VERSION}`],
     env: { INZO_WORKSPACE: dir },
   };
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);

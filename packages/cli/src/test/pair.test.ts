@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mergeMcpConfig } from "../pair.js";
+import { MCP_VERSION } from "../version.js";
 
 let dir: string;
 let cwd: string;
@@ -24,7 +25,7 @@ describe("mergeMcpConfig", () => {
     const config = JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8"));
     expect(config.mcpServers.inzo).toEqual({
       command: "npx",
-      args: ["-y", "inzo-mcp"],
+      args: ["-y", `inzo-mcp@${MCP_VERSION}`],
       env: { INZO_WORKSPACE: dir },
     });
   });
@@ -37,7 +38,7 @@ describe("mergeMcpConfig", () => {
     mergeMcpConfig();
     const config = JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8"));
     expect(config.mcpServers.other).toEqual({ command: "npx", args: ["-y", "other-mcp"] });
-    expect(config.mcpServers.inzo.args).toEqual(["-y", "inzo-mcp"]);
+    expect(config.mcpServers.inzo.args).toEqual(["-y", `inzo-mcp@${MCP_VERSION}`]);
   });
 
   it("refuses to clobber an unparsable .mcp.json", () => {

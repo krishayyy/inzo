@@ -2,6 +2,7 @@
 import { approve, audit, budget, revoke, status, watch, withdraw } from "./commands.js";
 import { invite, pair } from "./pair.js";
 import { capacity } from "./capacity.js";
+import { refreshUpdateCache, updateNotice } from "./update.js";
 import { doctor } from "./doctor.js";
 import { done } from "./done.js";
 import { mode } from "./mode.js";
@@ -11,8 +12,7 @@ import { tokens } from "./tokens.js";
 import { sessionFilePath } from "./session.js";
 import { style } from "./render.js";
 
-/** Kept in step with packages/cli/package.json by the release process. */
-const VERSION = "0.1.0";
+import { VERSION } from "./version.js";
 
 const USAGE = `inzo — pair, watch, and control an agent pairing
 
@@ -111,6 +111,17 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // Reads yesterday's cached answer and starts today's refresh in the
+  // background. Never blocks, never off a TTY, never fails (§9 U-1).
+  const notice = updateNotice(VERSION);
+  refreshUpdateCache();
+
+  const result = await dispatch(command, rest);
+  if (notice) process.stderr.write(`${notice}\n`);
+  return result;
+}
+
+async function dispatch(command: string | undefined, rest: string[]): Promise<number> {
   switch (command) {
     case "start":
       await start(rest);

@@ -8,6 +8,8 @@
  */
 import {
   InvalidSessionDescriptorError,
+  MIN_CLIENT_VERSION,
+  PROTOCOL_VERSION,
   validateContextInput,
   validatePresence,
   validateSessionDescriptor,
@@ -284,7 +286,7 @@ async function route(req: Request, env: Env): Promise<Response> {
       throw err;
     }
     const result = await registry.createPairingCode(cnf, session);
-    return json(result, 201);
+    return json({ ...result, minClientVersion: MIN_CLIENT_VERSION, protocolVersion: PROTOCOL_VERSION }, 201);
   }
 
   // POST /pairings/:code/join
@@ -331,6 +333,10 @@ async function route(req: Request, env: Env): Promise<Response> {
         credential: joined.credential,
         members,
         session: joined.session,
+        // Advertised on every entry point, so a client learns it is too old
+        // before it acts rather than after it misbehaves (§9 U-3).
+        minClientVersion: MIN_CLIENT_VERSION,
+        protocolVersion: PROTOCOL_VERSION,
       },
       201,
     );

@@ -546,3 +546,24 @@ export interface LedgerStats {
 export function contextKey(path: string, sha: string): string {
   return `${path}@${sha}`;
 }
+
+// ---------------------------------------------------------------------------
+// Version negotiation (§9 U-3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The oldest client this relay will let into a pairing.
+ *
+ * Raise it only for a change a stale client would get *wrong*, not merely
+ * miss — an added optional field is not one of those. The cost of raising it
+ * is that every teammate must upgrade before anyone can join, so it is a real
+ * decision, not a version bump.
+ *
+ * The reason a minimum exists at all: the thing two clients could silently
+ * disagree about is what a human approved. A clear refusal beats a subtle
+ * disagreement about consent.
+ */
+export const MIN_CLIENT_VERSION = "0.1.0";
+
+/** The protocol revision, bumped when the wire format changes shape. */
+export const PROTOCOL_VERSION = 3;
