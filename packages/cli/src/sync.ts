@@ -1,9 +1,10 @@
 import { MAX_DIRTY_PATHS, type Presence } from "inzo-protocol";
 import { readCapacity } from "./capacity.js";
-import { createApi, type Api } from "./api.js";
-import { currentBranch, git, gitOrNull, requireGit } from "./git.js";
+import { type Api } from "./api.js";
+import { attach } from "./attach.js";
+import { currentBranch, git, gitOrNull, originUrl, requireGit } from "./git.js";
 import { style } from "./render.js";
-import { loadSession, requirePairing, resolveWorkspace } from "./session.js";
+import { resolveWorkspace } from "./session.js";
 import { usage } from "./start.js";
 
 /**
@@ -53,9 +54,7 @@ export async function sync(argv: string[]): Promise<void> {
   const flags = parseSyncFlags(argv);
   await requireGit();
 
-  const session = loadSession();
-  const pairingId = requirePairing(session);
-  const api = createApi(session);
+  const { api, pairingId } = await attach();
   const workspace = resolveWorkspace();
 
   const { session: descriptor } = await api.session(pairingId);
@@ -76,6 +75,16 @@ export async function sync(argv: string[]): Promise<void> {
   // when a refusal is worth having.
   if (PROTECTED.has(branch)) {
     throw new Error(`Refusing to push "${branch}". Inzo never pushes a shared trunk branch.`);
+  }
+
+  // Checked before running anything, so a repo with no remote gets a sentence
+  // that names the fix instead of git's "fatal: 'origin' does not appear to
+  // be a git repository", which is true but unhelpful.
+  if ((await originUrl(workspace)) === null) {
+    throw new Error(
+      "This repo has no `origin` remote, so there is nothing to sync with. " +
+        "Add one with `gh repo create --source=. --push` or `git remote add origin <url>`, then start the session again.",
+    );
   }
 
   const commands = syncArgv(branch);

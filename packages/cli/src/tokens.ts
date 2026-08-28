@@ -1,6 +1,5 @@
-import { createApi } from "./api.js";
 import { style } from "./render.js";
-import { loadSession, requirePairing } from "./session.js";
+import { attach } from "./attach.js";
 import { usage } from "./start.js";
 
 /**
@@ -73,9 +72,7 @@ export function parseTokensFlags(argv: string[]): { json: boolean; turns: number
 
 export async function tokens(argv: string[]): Promise<void> {
   const flags = parseTokensFlags(argv);
-  const session = loadSession();
-  const pairingId = requirePairing(session);
-  const api = createApi(session);
+  const { api, pairingId } = await attach();
 
   // Any read returns the ledger's stats, and a key nobody will have written
   // is the cheapest way to ask for them. It counts as a miss, which is honest:

@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InvalidSessionDescriptorError } from "inzo-protocol";
+import { InvalidSessionDescriptorError, validateRepoName } from "inzo-protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cloneArgv, secretShapedFiles } from "../git.js";
+import { cloneArgv, isGitRepo, isRepoRoot, secretShapedFiles } from "../git.js";
 import {
   classifyStartArg,
   expandRepoShorthand,
@@ -14,6 +14,7 @@ import {
   parseJoinFlags,
   parseStartFlags,
   repoNameFromUrl,
+  scratchDirName,
 } from "../start.js";
 
 let dir: string;
@@ -183,5 +184,39 @@ describe("session branch", () => {
     const a = newSessionBranch();
     expect(a).toMatch(/^inzo\/[0-9a-f]{6}$/);
     expect(a).not.toBe(newSessionBranch());
+  });
+});
+
+describe("scratch directory naming", () => {
+  it("does not repeat the prefix the code already carries", () => {
+    // Found by running it: `inzo-${code}` on INZO-UGEG2Z gave the joiner a
+    // directory called inzo-inzo-ugeg2z.
+    expect(scratchDirName("INZO-UGEG2Z")).toBe("inzo-ugeg2z");
+    expect(scratchDirName("7FK2Q9")).toBe("inzo-7fk2q9");
+  });
+
+  it("stays a valid directory name the protocol would accept", () => {
+    expect(() => validateRepoName(scratchDirName("INZO-UGEG2Z"))).not.toThrow();
+  });
+});
+
+describe("repo root detection", () => {
+  it("does not mistake a directory inside a repo for a repo of its own", async () => {
+    // Found by running `inzo join` under a home directory that was itself a
+    // git repo: the scratch dir was adopted by the ancestor, `git status`
+    // scanned all of $HOME, and join appeared to hang. Every later git
+    // command would have targeted the wrong repository.
+    execFileSync("git", ["init", "--quiet"], { cwd: dir });
+    mkdirSync(join(dir, "child"));
+
+    expect(await isGitRepo(join(dir, "child"))).toBe(true);
+    expect(await isRepoRoot(join(dir, "child"))).toBe(false);
+    expect(await isRepoRoot(dir)).toBe(true);
+  });
+
+  it("reports a plain directory as neither", async () => {
+    const plain = join(dir, "plain");
+    mkdirSync(plain);
+    expect(await isRepoRoot(plain)).toBe(false);
   });
 });

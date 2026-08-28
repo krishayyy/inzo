@@ -17,6 +17,7 @@ import {
   git,
   gitOrNull,
   isGitRepo,
+  isRepoRoot,
   originUrl,
   requireGit,
   secretShapedFiles,
@@ -218,9 +219,16 @@ function printSecretNotice(files: string[]): void {
   );
 }
 
+/**
+ * Makes `dir` a repository of its own.
+ *
+ * `isRepoRoot`, not `isGitRepo`: inside a home directory that is itself under
+ * git, "am I in a work tree" is true for every new directory, and believing it
+ * would leave this one adopted by the ancestor repo rather than owning itself.
+ */
 async function initRepo(dir: string): Promise<void> {
   mkdirSync(dir, { recursive: true });
-  if (!(await isGitRepo(dir))) await git(["init", "--quiet"], dir);
+  if (!(await isRepoRoot(dir))) await git(["init", "--quiet"], dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +254,7 @@ export async function start(argv: string[]): Promise<void> {
       const name = repoNameFromUrl(arg.url);
       workspace = resolve(parent, name);
       if (existsSync(workspace)) {
-        if (!(await isGitRepo(workspace))) {
+        if (!(await isRepoRoot(workspace))) {
           throw new Error(`${workspace} already exists and is not a git repository. Move it aside, or pass --dir.`);
         }
         process.stdout.write(`Using the clone already at ${workspace}.\n`);
@@ -457,9 +465,10 @@ export async function join(argv: string[]): Promise<void> {
  */
 async function bootstrapJoin(descriptor: SessionDescriptor, parent: string, code: string): Promise<string> {
   const repo = descriptor.repo;
+  const scratchName = scratchDirName(code);
 
   if (!repo) {
-    const dir = resolve(parent, `inzo-${code.toLowerCase()}`);
+    const dir = resolve(parent, scratchName);
     if (existsSync(dir)) throw new Error(`${dir} already exists. Remove it, or pass --dir <path>.`);
     await requireGit();
     await initRepo(dir);
@@ -482,7 +491,7 @@ async function bootstrapJoin(descriptor: SessionDescriptor, parent: string, code
   }
 
   if (!repo.url) {
-    const dir = resolve(parent, `inzo-${code.toLowerCase()}`);
+    const dir = resolve(parent, scratchName);
     if (existsSync(dir)) throw new Error(`${dir} already exists. Remove it, or pass --dir <path>.`);
     await initRepo(dir);
     process.stdout.write(
@@ -517,4 +526,15 @@ async function announce(workspace: string, branch: string): Promise<void> {
   } catch {
     // A liveness hint is never worth failing a join over.
   }
+}
+
+
+/**
+ * The directory a joiner lands in when the session has no repo.
+ *
+ * Codes already read `INZO-7FK2Q9`, so prefixing blindly produced
+ * `inzo-inzo-7fk2q9`. Strip the code's own prefix first.
+ */
+export function scratchDirName(code: string): string {
+  return `inzo-${code.toLowerCase().replace(/^inzo-/, "")}`;
 }

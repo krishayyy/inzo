@@ -2,10 +2,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { generateHolderKeyPair, sessionFilePathFor, writeCurrentPointer } from "inzo-holder";
 import type { SessionDescriptor } from "inzo-protocol";
-import { createApi } from "./api.js";
+import { attach } from "./attach.js";
 import { MCP_VERSION } from "./version.js";
 import { style } from "./render.js";
-import { loadSession, requirePairing, resolveWorkspace, type SessionFile } from "./session.js";
+import { resolveWorkspace, type SessionFile } from "./session.js";
 
 /**
  * Same default as packages/mcp-server/src/relayClient.ts — both sides of a
@@ -159,9 +159,7 @@ export async function pair(code?: string): Promise<void> {
  * build, and it's what create/join already does).
  */
 export async function invite(count: number): Promise<void> {
-  const session = loadSession();
-  const pairingId = requirePairing(session);
-  const api = createApi(session);
+  const { api, pairingId } = await attach();
 
   for (let i = 0; i < count; i++) {
     const result = await api.invite(pairingId);

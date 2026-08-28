@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createApi } from "./api.js";
+import { attach } from "./attach.js";
 import { currentBranch, gitOrNull, originUrl, requireGit } from "./git.js";
 import { style } from "./render.js";
-import { loadSession, requirePairing, resolveWorkspace } from "./session.js";
+import { resolveWorkspace } from "./session.js";
 import { usage } from "./start.js";
 import { sync } from "./sync.js";
 
@@ -75,9 +75,7 @@ export async function done(argv: string[]): Promise<void> {
   await requireGit();
 
   const workspace = resolveWorkspace();
-  const session = loadSession();
-  const pairingId = requirePairing(session);
-  const api = createApi(session);
+  const { api, pairingId } = await attach();
 
   // Sync first, always. A PR opened from an unsynced branch shows the reviewer
   // a different diff than the one the team just agreed on.

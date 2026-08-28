@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { signConsent } from "inzo-holder";
-import { createApi, type Api, type Message, type PresenceEntry } from "./api.js";
+import { type Api, type Message, type PresenceEntry } from "./api.js";
+import { attach } from "./attach.js";
 import {
   formatMessage,
   formatPairing,
@@ -11,7 +12,7 @@ import {
   shortMember,
   style,
 } from "./render.js";
-import { loadSession, requirePairing, type SessionFile } from "./session.js";
+import { type SessionFile } from "./session.js";
 import { subscribe } from "./sse.js";
 
 export interface Ctx {
@@ -23,11 +24,11 @@ export interface Ctx {
   out: (line: string) => void;
 }
 
-function context(): Ctx {
-  const session = loadSession();
+async function context(): Promise<Ctx> {
+  const { session, api, pairingId } = await attach();
   return {
-    api: createApi(session),
-    pairingId: requirePairing(session),
+    api,
+    pairingId,
     agentId: session.agentId,
     session,
     // eslint-disable-next-line no-console
@@ -36,7 +37,8 @@ function context(): Ctx {
 }
 
 /** One-shot snapshot: who you are paired with, the plan, and the runway. */
-export async function status(ctx = context()): Promise<void> {
+export async function status(ctx?: Ctx): Promise<void> {
+  ctx ??= await context();
   const [{ pairing }, { plan }, snapshot] = await Promise.all([
     ctx.api.mine(),
     ctx.api.plan(ctx.pairingId),
@@ -55,7 +57,8 @@ export async function status(ctx = context()): Promise<void> {
  * Live view. This is the surface that makes "both humans watch it happen"
  * true rather than a claim in a README.
  */
-export async function watch(ctx = context(), signal?: AbortSignal): Promise<void> {
+export async function watch(ctx?: Ctx, signal?: AbortSignal): Promise<void> {
+  ctx ??= await context();
   const controller = new AbortController();
   signal?.addEventListener("abort", () => controller.abort(), { once: true });
   process.once("SIGINT", () => controller.abort());
@@ -148,7 +151,8 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
  * confirmation before recording consent, then approves that specific version
  * — so consent is always attached to text a human actually read.
  */
-export async function approve(ctx = context(), confirm = askYesNo): Promise<void> {
+export async function approve(ctx?: Ctx, confirm = askYesNo): Promise<void> {
+  ctx ??= await context();
   const [{ pairing }, { plan }] = await Promise.all([ctx.api.mine(), ctx.api.plan(ctx.pairingId)]);
   if (!pairing) throw new Error("No active pairing.");
   if (!plan) throw new Error("No plan has been proposed yet — nothing to approve.");
@@ -203,7 +207,8 @@ export async function approve(ctx = context(), confirm = askYesNo): Promise<void
  * withdrawing consent is the safe direction, and the moment you want it is the
  * moment you have stopped trusting what is happening.
  */
-export async function withdraw(ctx = context()): Promise<void> {
+export async function withdraw(ctx?: Ctx): Promise<void> {
+  ctx ??= await context();
   const { consent } = await ctx.api.withdrawConsent(ctx.pairingId);
   ctx.out(style.yellow("Approval withdrawn."));
   ctx.out(
@@ -216,7 +221,8 @@ export async function withdraw(ctx = context()): Promise<void> {
 }
 
 /** Prints the tamper-evident log, and says loudly if the chain is broken. */
-export async function audit(args: string[], ctx = context()): Promise<void> {
+export async function audit(args: string[], ctx?: Ctx): Promise<void> {
+  ctx ??= await context();
   const flags = parseFlags(args);
   const since = flags.since ? Number(flags.since) : undefined;
   const { records, chainValid, brokenAt, issuer } = await ctx.api.audit(ctx.pairingId, since);
@@ -244,7 +250,8 @@ export async function audit(args: string[], ctx = context()): Promise<void> {
  * here (rather than letting the relay guess) means a 3+ member pairing gets a
  * message naming its members instead of an opaque 400.
  */
-export async function revoke(target: string, ctx = context(), confirm = askYesNo): Promise<void> {
+export async function revoke(target: string, ctx?: Ctx, confirm = askYesNo): Promise<void> {
+  ctx ??= await context();
   const { pairing } = await ctx.api.mine();
   if (!pairing) throw new Error("No active pairing.");
 
@@ -282,7 +289,8 @@ export async function revoke(target: string, ctx = context(), confirm = askYesNo
   }
 }
 
-export async function budget(args: string[], ctx = context()): Promise<void> {
+export async function budget(args: string[], ctx?: Ctx): Promise<void> {
+  ctx ??= await context();
   const flags = parseFlags(args);
   const input: Record<string, unknown> = {};
   if ("deadline" in flags) input.deadline = flags.deadline === "none" ? null : flags.deadline;

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import { promisify } from "node:util";
 import { validateRepoName, validateRepoUrl } from "inzo-protocol";
 
@@ -35,6 +35,25 @@ export async function requireGit(): Promise<void> {
 
 export async function isGitRepo(dir: string): Promise<boolean> {
   return (await gitOrNull(["rev-parse", "--is-inside-work-tree"], dir)) === "true";
+}
+
+/**
+ * Whether `dir` is a repository root in its own right — not merely a
+ * directory that happens to sit inside someone else's repository.
+ *
+ * The difference is not academic, and it bit hard the first time this was run
+ * end to end. `git rev-parse --is-inside-work-tree` answers true for a
+ * brand-new empty directory when any ancestor is a repo, and a home directory
+ * under git is common. `initRepo` believed the scratch directory was already
+ * a repository, skipped `git init`, and the directory silently became part of
+ * the user's home repo: `git status` then scanned all of $HOME (which is how
+ * this was found — `inzo join` appeared to hang), and every later git command
+ * would have been aimed at the wrong repository entirely.
+ */
+export async function isRepoRoot(dir: string): Promise<boolean> {
+  const top = await gitOrNull(["rev-parse", "--show-toplevel"], dir);
+  if (top === null) return false;
+  return realpathSync(top) === realpathSync(dir);
 }
 
 export async function originUrl(dir: string): Promise<string | null> {

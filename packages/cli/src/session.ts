@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { SessionDescriptor } from "inzo-protocol";
 import { legacySessionFilePath, readCurrentPointer, sessionFilePathFor } from "inzo-holder";
@@ -94,6 +94,25 @@ export function loadSession(): SessionFile {
     throw new Error(`The session file at ${path} is incomplete. Re-pair to rewrite it.`);
   }
   return parsed;
+}
+
+/**
+ * Writes back a pairing id learned from the relay.
+ *
+ * A targeted rewrite of the file that already exists — never a fresh write,
+ * because everything else in it (the holder private key above all) is not
+ * this function's to reconstruct.
+ */
+export function rememberPairingId(session: SessionFile, pairingId: string): void {
+  try {
+    const path = sessionFilePath();
+    const current = JSON.parse(readFileSync(path, "utf8")) as SessionFile;
+    writeFileSync(path, `${JSON.stringify({ ...current, pairingId }, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(path, 0o600);
+  } catch {
+    // Costs one extra request next time; never worth failing the command.
+  }
+  session.pairingId = pairingId;
 }
 
 export function requirePairing(session: SessionFile): string {

@@ -1,7 +1,6 @@
 import { DEFAULT_SESSION_MODE, MODE_POLICY, SESSION_MODES, type SessionMode } from "inzo-protocol";
-import { createApi } from "./api.js";
 import { style } from "./render.js";
-import { loadSession, requirePairing } from "./session.js";
+import { attach } from "./attach.js";
 import { usage } from "./start.js";
 
 /**
@@ -26,9 +25,7 @@ export async function mode(argv: string[]): Promise<void> {
     usage(`mode must be one of: ${SESSION_MODES.join(", ")}`);
   }
 
-  const session = loadSession();
-  const pairingId = requirePairing(session);
-  const api = createApi(session);
+  const { api, pairingId } = await attach();
 
   const { session: current } = await api.session(pairingId);
 
