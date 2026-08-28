@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { approve, audit, budget, revoke, status, watch, withdraw } from "./commands.js";
 import { invite, pair } from "./pair.js";
+import { capacity } from "./capacity.js";
 import { doctor } from "./doctor.js";
 import { done } from "./done.js";
 import { mode } from "./mode.js";
@@ -23,6 +24,8 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo done                  sync, then open a PR from the session branch
   inzo doctor                check git, Docker, gh, the relay, and this session
   inzo tokens                what Inzo costs in tokens, against what it saves
+  inzo capacity [--window 5h --used 62% --resets 15:40]
+                             declare how much of your AI quota is left
   inzo pair                  create a pairing code and wire up .mcp.json here
   inzo pair <code>           join a pairing code a teammate shared with you
   inzo pair --invite <n>     invite <n> more teammates into your active pairing
@@ -68,6 +71,7 @@ const COMMANDS = [
   "done",
   "doctor",
   "tokens",
+  "capacity",
   "pair",
   "watch",
   "status",
@@ -127,6 +131,9 @@ async function main(argv: string[]): Promise<number> {
       return await doctor(rest);
     case "tokens":
       await tokens(rest);
+      return 0;
+    case "capacity":
+      await capacity(rest);
       return 0;
     case "pair": {
       if (rest[0] === "--invite") {

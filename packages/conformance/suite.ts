@@ -576,5 +576,78 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
       });
     });
 
+
+    describe("capacity on presence (§8)", () => {
+      const BASE = { branch: "inzo/7fk2q9", head: "a1b2c3d", dirty: [], ahead: 0, behind: 0, conflicted: false };
+      const CAPACITY = {
+        provider: "anthropic",
+        windows: [
+          { label: "5h", used: 0.62, resetsAt: "2026-09-01T15:40:00.000Z", estimated: true },
+          { label: "weekly", used: 0.31, resetsAt: null, estimated: false },
+        ],
+      };
+
+      it("carries capacity through on the presence beat, with no new endpoint", async () => {
+        // The whole design point: capacity is a fast-changing per-member
+        // liveness hint, which is exactly what presence already is. Zero new
+        // protocol surface, zero storage, zero extra requests.
+        const client = await makeClient();
+        const { pairingId, a, b } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/presence`, { presence: { ...BASE, capacity: CAPACITY } }, a.auth);
+
+        const seen = await client.get(`/pairings/${pairingId}/presence`, b.auth);
+        expect(seen.body.presence[0].capacity.provider).toBe("anthropic");
+        expect(seen.body.presence[0].capacity.windows).toHaveLength(2);
+        expect(seen.body.presence[0].capacity.windows[0].used).toBe(0.62);
+      });
+
+      it("keeps a member who reports no windows quiet rather than guessing", async () => {
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/presence`, { presence: BASE }, a.auth);
+        const seen = await client.get(`/pairings/${pairingId}/presence`, a.auth);
+        // Null, never a zeroed window — a zero would read as "no quota left".
+        expect(seen.body.presence[0].capacity ?? null).toBeNull();
+      });
+
+      it("preserves estimated:true, and defaults to it when unstated", async () => {
+        // An estimate presented as fact is the failure mode worth preventing:
+        // the window is per account, so a member also working solo is
+        // undercounted by any self-reported number.
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(
+          `/pairings/${pairingId}/presence`,
+          { presence: { ...BASE, capacity: { provider: "x", windows: [{ label: "5h", used: 0.5 }] } } },
+          a.auth,
+        );
+        const seen = await client.get(`/pairings/${pairingId}/presence`, a.auth);
+        expect(seen.body.presence[0].capacity.windows[0].estimated).toBe(true);
+      });
+
+      describe("rejects malformed capacity identically", () => {
+        const BAD: Array<[string, unknown]> = [
+          ["a missing provider", { windows: [] }],
+          ["non-array windows", { provider: "x", windows: {} }],
+          ["a used over 1", { provider: "x", windows: [{ label: "5h", used: 1.5 }] }],
+          ["a negative used", { provider: "x", windows: [{ label: "5h", used: -0.1 }] }],
+          ["a non-numeric used", { provider: "x", windows: [{ label: "5h", used: "62%" }] }],
+          ["a missing label", { provider: "x", windows: [{ used: 0.5 }] }],
+          ["an unparseable resetsAt", { provider: "x", windows: [{ label: "5h", used: 0.5, resetsAt: "soon" }] }],
+          ["too many windows", { provider: "x", windows: Array.from({ length: 9 }, () => ({ label: "w", used: 0.1 })) }],
+          ["a non-object capacity", "anthropic"],
+        ];
+
+        for (const [why, capacity] of BAD) {
+          it(`rejects ${why}`, async () => {
+            const client = await makeClient();
+            const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+            const res = await client.post(`/pairings/${pairingId}/presence`, { presence: { ...BASE, capacity } }, a.auth);
+            expect(res.status).toBe(400);
+          });
+        }
+      });
+    });
+
   });
 }

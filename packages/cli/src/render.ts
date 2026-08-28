@@ -1,4 +1,5 @@
-import { overlappingPaths } from "inzo-protocol";
+import { overlappingPaths, tightestWindow } from "inzo-protocol";
+import { formatWindow } from "./capacity.js";
 import type { Message, MinePairing, Plan, PresenceEntry, Runway } from "./api.js";
 
 const useColor = process.env.NO_COLOR === undefined && process.stdout.isTTY === true;
@@ -156,6 +157,16 @@ export function formatPresence(entries: PresenceEntry[], selfAgentId: string): s
     const flag = entry.conflicted ? style.red("  CONFLICTED") : "";
     return `  ${who}${entry.branch.padEnd(16)}${counts}  ${files}${more}${flag}`;
   });
+
+  // A member who reports no windows renders nothing at all, rather than a
+  // zero that would read as "no quota left" (§8).
+  for (const entry of entries) {
+    const window = tightestWindow(entry.capacity);
+    if (!window) continue;
+    const who = memberLabel(entry.agentId, selfAgentId).padEnd(16);
+    const line = `  ${who}${formatWindow(window)}`;
+    lines.push(window.used >= 0.9 ? style.red(`${line}  LOW`) : window.used >= 0.75 ? style.yellow(line) : style.dim(line));
+  }
 
   const overlap = overlappingPaths(entries);
   if (overlap.length > 0) {

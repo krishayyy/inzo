@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { readCapacity } from "./capacity.js";
 import { RELAY_URL } from "./pair.js";
 import { style } from "./render.js";
 import { resolveWorkspace, sessionFilePath } from "./session.js";
@@ -102,11 +103,40 @@ export async function runChecks(): Promise<Check[]> {
     detail: gh ?? "not found — `inzo done` prints the PR command instead of opening one",
   });
 
+  checks.push(capacityCheck());
   checks.push(await relayCheck());
   checks.push(sessionCheck());
   checks.push(mcpConfigCheck(workspace));
 
   return checks;
+}
+
+/**
+ * Which capacity source is in use (§8's "honest limits").
+ *
+ * Worth reporting because the difference is not cosmetic: a quota window is
+ * per *account*, so a self-reported estimate undercounts anyone also working
+ * solo or in a second session. Declaring it by hand is the accurate path, and
+ * a user who does not know which one they are on cannot judge the number.
+ */
+function capacityCheck(): Check {
+  const capacity = readCapacity();
+  const window = capacity?.windows[0];
+  if (!window) {
+    return {
+      name: "capacity",
+      ok: false,
+      required: false,
+      detail: "none declared — teammates see no quota for you (inzo capacity --window 5h --used 62%)",
+    };
+  }
+  const source = window.estimated ? "estimated" : "human-declared, exact";
+  return {
+    name: "capacity",
+    ok: true,
+    required: false,
+    detail: `${capacity!.provider}: ${Math.round(window.used * 100)}% of ${window.label} (${source})`,
+  };
 }
 
 async function relayCheck(): Promise<Check> {

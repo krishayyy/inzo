@@ -1,4 +1,5 @@
 import { MAX_DIRTY_PATHS, type Presence } from "inzo-protocol";
+import { readCapacity } from "./capacity.js";
 import { createApi, type Api } from "./api.js";
 import { currentBranch, git, gitOrNull, requireGit } from "./git.js";
 import { style } from "./render.js";
@@ -156,6 +157,8 @@ export async function readPresence(workspace: string, branch: string, conflicted
     ahead: Number.isFinite(ahead) ? ahead : 0,
     behind: Number.isFinite(behind) ? behind : 0,
     conflicted,
+    // Rides the beat that already exists: no new endpoint, no extra request.
+    capacity: readCapacity(),
   };
 }
 

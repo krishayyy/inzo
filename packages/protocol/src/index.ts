@@ -279,6 +279,40 @@ export function modeOnPlanLock(current: SessionMode): SessionMode | null {
  * Nothing is enforced against it — it exists so two people editing one repo
  * can see the overlap git cannot show them.
  */
+/**
+ * One rate-limit window a member is working inside.
+ *
+ * **No vendor appears in this schema, deliberately.** N windows, each a
+ * used-fraction and a reset time, is what makes this model-agnostic rather
+ * than Claude-shaped with adapters bolted on: Claude is a 5h rolling window
+ * plus a weekly one, an OpenAI-style account is RPM/TPM plus monthly spend, a
+ * local model has none. A provider nobody has taught us about reports no
+ * windows and the feature goes quiet rather than guessing.
+ */
+export interface CapacityWindow {
+  /** Free-form, shown verbatim: "5h", "weekly", "monthly spend". */
+  label: string;
+  /** 0..1 of the window consumed. */
+  used: number;
+  /** ISO timestamp, or null when the reset time genuinely isn't known. */
+  resetsAt: string | null;
+  /**
+   * True when this is derived from self-reported token counts rather than
+   * stated by the provider. Always rendered as an estimate, never as fact —
+   * the window is per *account*, so a member also working solo is undercounted.
+   */
+  estimated: boolean;
+}
+
+export interface Capacity {
+  /** Whatever the member calls their provider. Never interpreted, only shown. */
+  provider: string;
+  windows: CapacityWindow[];
+}
+
+export const MAX_CAPACITY_WINDOWS = 8;
+export const MAX_LABEL_LENGTH = 40;
+
 export interface Presence {
   branch: string;
   /** Short commit sha of the member's HEAD. */
@@ -289,6 +323,17 @@ export interface Presence {
   behind: number;
   /** True while a rebase is stopped on a conflict — see `inzo sync`. */
   conflicted: boolean;
+  /**
+   * How much of this member's AI quota is left (§8).
+   *
+   * It rides on presence rather than getting an endpoint because it is
+   * exactly what presence already is: a fast-changing, ephemeral, per-member
+   * liveness hint. Zero new protocol surface, zero storage, zero extra
+   * requests. The separation that matters: budget is *intent* — persisted,
+   * approved, auditable — and capacity is *current reality*, advisory and
+   * gone in 90 seconds.
+   */
+  capacity?: Capacity | null;
 }
 
 /** How long a presence entry stays live without a refresh. */
@@ -332,7 +377,62 @@ export function validatePresence(input: unknown): Presence {
     ahead: count(input.ahead, "presence.ahead"),
     behind: count(input.behind, "presence.behind"),
     conflicted: input.conflicted === true,
+    capacity: validateCapacity(input.capacity),
   };
+}
+
+/** Absent and null both mean "this member reports no capacity", not zero. */
+export function validateCapacity(input: unknown): Capacity | null {
+  if (input === undefined || input === null) return null;
+  if (!isPlainObject(input)) fail("presence.capacity must be an object or null");
+
+  const provider = input.provider;
+  if (typeof provider !== "string" || provider.length === 0) fail("capacity.provider must be a non-empty string");
+  if (provider.length > MAX_LABEL_LENGTH) fail(`capacity.provider must be at most ${MAX_LABEL_LENGTH} characters`);
+  if (CONTROL_CHARS.test(provider)) fail("capacity.provider must not contain control characters");
+
+  if (!Array.isArray(input.windows)) fail("capacity.windows must be an array");
+  if (input.windows.length > MAX_CAPACITY_WINDOWS) {
+    fail(`capacity.windows must hold at most ${MAX_CAPACITY_WINDOWS} windows`);
+  }
+
+  const windows = input.windows.map((window): CapacityWindow => {
+    if (!isPlainObject(window)) fail("capacity.windows entries must be objects");
+    const label = window.label;
+    if (typeof label !== "string" || label.length === 0) fail("capacity window label must be a non-empty string");
+    if (label.length > MAX_LABEL_LENGTH) fail(`capacity window label must be at most ${MAX_LABEL_LENGTH} characters`);
+    if (CONTROL_CHARS.test(label)) fail("capacity window label must not contain control characters");
+
+    const used = window.used;
+    // Not clamped: a used-fraction outside 0..1 means the sender is computing
+    // it wrong, and quietly clamping would hide that from both humans.
+    if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || used > 1) {
+      fail("capacity window used must be a number between 0 and 1");
+    }
+
+    let resetsAt: string | null = null;
+    if (window.resetsAt !== undefined && window.resetsAt !== null) {
+      if (typeof window.resetsAt !== "string" || Number.isNaN(Date.parse(window.resetsAt))) {
+        fail("capacity window resetsAt must be an ISO timestamp or null");
+      }
+      resetsAt = window.resetsAt;
+    }
+
+    return { label, used, resetsAt, estimated: window.estimated !== false };
+  });
+
+  return { provider, windows };
+}
+
+/**
+ * The window closest to running out, or null when nothing is reported.
+ *
+ * Used to decide what to warn about: with several windows the binding one is
+ * whichever is fullest, not whichever is listed first.
+ */
+export function tightestWindow(capacity: Capacity | null | undefined): CapacityWindow | null {
+  if (!capacity || capacity.windows.length === 0) return null;
+  return capacity.windows.reduce((worst, window) => (window.used > worst.used ? window : worst));
 }
 
 function count(value: unknown, field: string): number {
