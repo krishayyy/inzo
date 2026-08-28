@@ -212,3 +212,49 @@ export function parseSessionDescriptor(raw: string | null | undefined): SessionD
 export function serializeSessionDescriptor(descriptor: SessionDescriptor): string {
   return JSON.stringify(descriptor);
 }
+
+// ---------------------------------------------------------------------------
+// Mode policy
+// ---------------------------------------------------------------------------
+
+/**
+ * What a mode actually sets. Three layers of very different strength, and the
+ * table is worth reading as such:
+ *
+ *   - consent (is the plan locked?) is **hard** — server-verified on every
+ *     route, and it gates peer-originated commands by itself. A mode never
+ *     loosens it.
+ *   - `readonly` / `network` are **hard** — Docker enforces both.
+ *   - `enforceItemOwnership` and the playbook are **advisory**, agent-side.
+ *
+ * Modes never change credential scope. Scope narrows one-way and is a separate,
+ * human-controlled axis; binding it to mode would put friction on every step of
+ * the research -> plan -> build progression, which is monotonically widening.
+ */
+export interface ModePolicy {
+  /** Sandbox mount is read-only. `research` reads code; it does not change it. */
+  readonly: boolean;
+  /** Network inside the sandbox. On only for research, which needs to look things up. */
+  network: boolean;
+  /** Whether a command may only act on plan items the caller owns. */
+  enforceItemOwnership: boolean;
+}
+
+export const MODE_POLICY: Record<SessionMode, ModePolicy> = {
+  research: { readonly: true, network: true, enforceItemOwnership: false },
+  plan: { readonly: true, network: false, enforceItemOwnership: false },
+  build: { readonly: false, network: false, enforceItemOwnership: true },
+  cowork: { readonly: false, network: false, enforceItemOwnership: false },
+};
+
+/**
+ * The mode a session moves to when the plan locks, or null to stay put.
+ *
+ * Unanimous consent on a task split *is* the start of building, so making the
+ * human also type `inzo mode build` is ceremony. Only the two pre-build modes
+ * advance: `cowork` is a deliberate choice to work unstructured, and moving it
+ * to `build` would start enforcing an item ownership nobody asked for.
+ */
+export function modeOnPlanLock(current: SessionMode): SessionMode | null {
+  return current === "research" || current === "plan" ? "build" : null;
+}

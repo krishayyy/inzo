@@ -7,6 +7,7 @@
  */
 
 import { buildAuthHeaders } from "inzo-holder";
+import type { SessionDescriptor } from "inzo-protocol";
 
 /**
  * Defaults to the hosted relay so `inzo-mcp` works out of the box. Set
@@ -402,5 +403,13 @@ export const relayClient = {
 
   getUsage(pairingId: string, auth: Auth | string): Promise<UsageSnapshot> {
     return request("GET", `/pairings/${encodeURIComponent(pairingId)}/usage`, undefined, undefined, auth);
+  },
+
+  getSession(pairingId: string, auth: Auth | string): Promise<{ session: SessionDescriptor | null }> {
+    return request("GET", `/pairings/${encodeURIComponent(pairingId)}/session`, undefined, undefined, auth);
+  },
+
+  setSession(pairingId: string, auth: Auth | string, session: SessionDescriptor): Promise<{ session: SessionDescriptor }> {
+    return request("POST", `/pairings/${encodeURIComponent(pairingId)}/session`, { session }, undefined, auth);
   },
 };

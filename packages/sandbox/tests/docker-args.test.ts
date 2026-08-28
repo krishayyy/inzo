@@ -40,6 +40,14 @@ describe("buildDockerRunArgs", () => {
     expect(mountArg).toMatch(/^type=bind,source=\/.*relative\/path,target=\/workspace$/);
   });
 
+  it("mounts read-only only when explicitly requested (research mode)", () => {
+    const rw = buildDockerRunArgs({ command: "sh", workdir: "/tmp/x" });
+    expect(rw[rw.indexOf("--mount") + 1]).not.toContain("readonly");
+
+    const ro = buildDockerRunArgs({ command: "sh", workdir: "/tmp/x", readonly: true });
+    expect(ro[ro.indexOf("--mount") + 1]).toBe("type=bind,source=/tmp/x,target=/workspace,readonly");
+  });
+
   it("enables network only when explicitly requested", () => {
     const withNetwork = buildDockerRunArgs({
       command: "curl",

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { approve, audit, budget, revoke, status, watch, withdraw } from "./commands.js";
 import { invite, pair } from "./pair.js";
+import { mode } from "./mode.js";
 import { isUsageError, join, start } from "./start.js";
 import { sessionFilePath } from "./session.js";
 import { style } from "./render.js";
@@ -13,6 +14,7 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo start [mode|repo|name]
                              start a session here and print a code to share
   inzo join <code>           join a teammate's session: repo, branch, and mode
+  inzo mode [<mode>]         show or set research | plan | build | cowork
   inzo pair                  create a pairing code and wire up .mcp.json here
   inzo pair <code>           join a pairing code a teammate shared with you
   inzo pair --invite <n>     invite <n> more teammates into your active pairing
@@ -67,6 +69,9 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     case "join":
       await join(rest);
+      return 0;
+    case "mode":
+      await mode(rest);
       return 0;
     case "pair": {
       if (rest[0] === "--invite") {

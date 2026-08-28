@@ -65,8 +65,8 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
       created,
       joined,
       pairingId: joined.body.pairingId as string,
-      a: { auth: { Authorization: `Bearer ${created.body.agentToken}` } },
-      b: { auth: { Authorization: `Bearer ${joined.body.agentToken}` } },
+      a: { auth: { Authorization: `Bearer ${created.body.agentToken}` }, agentId: created.body.agentId as string },
+      b: { auth: { Authorization: `Bearer ${joined.body.agentToken}` }, agentId: joined.body.agentId as string },
     };
   }
 
@@ -193,6 +193,52 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
 
         const after = await client.get("/pairings/mine", a.auth);
         expect(after.body.pairing.scope).toEqual(before.body.pairing.scope);
+      });
+
+      it("advances research and plan to build when the plan locks, and leaves cowork alone", async () => {
+        // The phase gate IS the consent gate: the moment unanimous approval
+        // lands the team is by definition building, so making a human type
+        // `inzo mode build` is ceremony. Both relays must agree on that, or
+        // two members read the same pairing as being in different phases.
+        for (const [from, expected] of [
+          ["research", "build"],
+          ["plan", "build"],
+          ["cowork", "cowork"],
+          ["build", "build"],
+        ] as const) {
+          const client = await makeClient();
+          const { pairingId, a, b } = await pair(client, { mode: from, repo: null });
+
+          const proposed = await client.post(
+            `/pairings/${pairingId}/plan`,
+            { goal: "ship it", items: [{ owner: a.agentId, task: "do the thing" }] },
+            a.auth,
+          );
+          const version = proposed.body.plan.version;
+
+          await client.post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, a.auth);
+          const mid = await client.get(`/pairings/${pairingId}/session`, a.auth);
+          // One approval is not consent — nothing moves until the plan locks.
+          expect(mid.body.session.mode).toBe(from);
+
+          await client.post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, b.auth);
+          const after = await client.get(`/pairings/${pairingId}/session`, b.auth);
+          expect(after.body.session.mode).toBe(expected);
+        }
+      });
+
+      it("does not invent a descriptor for a session that never had one", async () => {
+        const client = await makeClient();
+        const { pairingId, a, b } = await pair(client);
+        const proposed = await client.post(
+          `/pairings/${pairingId}/plan`,
+          { goal: "ship it", items: [{ owner: a.agentId, task: "do the thing" }] },
+          a.auth,
+        );
+        const version = proposed.body.plan.version;
+        await client.post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, a.auth);
+        await client.post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, b.auth);
+        expect((await client.get(`/pairings/${pairingId}/session`, a.auth)).body.session ?? null).toBeNull();
       });
 
       describe("rejects malformed descriptors identically", () => {

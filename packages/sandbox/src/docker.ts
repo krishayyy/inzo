@@ -63,6 +63,7 @@ export function buildDockerRunArgs(options: RunInSandboxOptions): string[] {
   const memory = options.memory ?? DEFAULT_MEMORY_LIMIT;
   const cpus = options.cpus ?? DEFAULT_CPU_LIMIT;
   const network = options.network ?? false;
+  const readonlyMount = options.readonly ?? false;
 
   const args: string[] = [
     "run",
@@ -70,7 +71,7 @@ export function buildDockerRunArgs(options: RunInSandboxOptions): string[] {
     "--attach", "STDOUT",
     "--attach", "STDERR",
     "--workdir", CONTAINER_WORKDIR,
-    "--mount", `type=bind,source=${hostWorkdir},target=${CONTAINER_WORKDIR}`,
+    "--mount", `type=bind,source=${hostWorkdir},target=${CONTAINER_WORKDIR}${readonlyMount ? ",readonly" : ""}`,
     "--memory", memory,
     "--cpus", cpus,
     // Drop privileges / harden the container beyond the filesystem+network isolation.

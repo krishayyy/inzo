@@ -15,6 +15,14 @@ export interface RunInSandboxOptions {
   timeoutMs?: number;
   /** Whether the container gets network access. Default: false (no network). */
   network?: boolean;
+  /**
+   * Mount `workdir` read-only. Default: false.
+   *
+   * This is what makes `research` mode a real boundary rather than a label:
+   * Docker refuses the write, so an agent told to only read cannot write even
+   * if it ignores the instruction.
+   */
+  readonly?: boolean;
   /** Docker image to run the command in. Default: DEFAULT_SANDBOX_IMAGE. */
   image?: string;
   /**

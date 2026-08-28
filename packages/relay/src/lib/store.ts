@@ -10,6 +10,7 @@ import { planSubjectHash, type ConsentRecord } from "./consent.js";
 import { beginPlanWait, type WaitHandle } from "./agentrun.js";
 import type { Jwk } from "./credential.js";
 import {
+  modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
   type SessionDescriptor,
@@ -981,6 +982,21 @@ export class RelayStore {
     }
 
     relayEvents.publish({ type: "plan.updated", pairingId, plan });
+
+    // Unanimous consent on a task split IS the start of building, so the
+    // session advances itself rather than making a human type `inzo mode
+    // build`. `cowork` stays put — see modeOnPlanLock.
+    if (locked && pairing.session) {
+      const next = modeOnPlanLock(pairing.session.mode);
+      if (next) {
+        const advanced = { ...pairing.session, mode: next };
+        this.db
+          .prepare(`UPDATE pairings SET session = ? WHERE id = ?`)
+          .run(serializeSessionDescriptor(advanced), pairingId);
+        relayEvents.publish({ type: "session.updated", pairingId, session: advanced });
+      }
+    }
+
     return consentRecord ? { ...plan, consent: consentRecord } : plan;
   }
 

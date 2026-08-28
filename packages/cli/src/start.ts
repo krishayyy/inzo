@@ -53,7 +53,8 @@ export function isUsageError(err: unknown): boolean {
   return err instanceof Error && (err as UsageError).usage === true;
 }
 
-function usage(message: string): never {
+/** Throws the error that makes the process exit 2 rather than 1. */
+export function usage(message: string): never {
   throw new UsageError(message);
 }
 

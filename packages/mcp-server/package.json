@@ -19,7 +19,8 @@
     "inzo-sandbox": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.4.3",
-    "inzo-holder": "*"
+    "inzo-holder": "*",
+    "inzo-protocol": "*"
   },
   "devDependencies": {
     "inzo-relay": "*",

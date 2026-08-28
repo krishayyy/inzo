@@ -1,4 +1,5 @@
 import { buildAuthHeaders } from "inzo-holder";
+import type { SessionDescriptor } from "inzo-protocol";
 import type { SessionFile } from "./session.js";
 
 export interface ConsentRecord {
@@ -156,6 +157,9 @@ export function createApi(session: SessionFile) {
         `/pairings/${pairingId}/revoke`,
         { target },
       ),
+    session: (pairingId: string) => call<{ session: SessionDescriptor | null }>("GET", `/pairings/${pairingId}/session`),
+    setSession: (pairingId: string, session: SessionDescriptor) =>
+      call<{ session: SessionDescriptor }>("POST", `/pairings/${pairingId}/session`, { session }),
     /** Mints a fresh one-shot code inviting a 3rd+ member into this pairing. */
     invite: (pairingId: string) => call<{ code: string; expiresAt: string }>("POST", `/pairings/${pairingId}/invite`, {}),
     streamUrl: (pairingId: string) => {

@@ -4,7 +4,8 @@ import { DEFAULT_TIMEOUT_MS, type RunInSandboxOptions, type SandboxResult } from
 /**
  * Runs a command inside an isolated Docker container:
  *  - Filesystem: only `options.workdir` is visible to the container (mounted
- *    read-write at /workspace); nothing else on the host is reachable.
+ *    read-write at /workspace, or read-only with `readonly: true`); nothing
+ *    else on the host is reachable.
  *  - Network: disabled by default (`--network none`); pass `network: true`
  *    to opt a specific call into outbound network access.
  *  - Time: killed after `timeoutMs` (default 30s) if still running.

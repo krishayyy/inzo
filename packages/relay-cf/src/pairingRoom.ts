@@ -16,6 +16,7 @@
  * throw/catch semantics; the `OrThrow` suffix marks those.
  */
 import {
+  modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
   type SessionDescriptor,
@@ -709,6 +710,19 @@ export class PairingRoom extends DurableObject<Env> {
       }
 
       this.broadcast("plan.updated", { plan });
+
+      // Unanimous consent on a task split IS the start of building, so the
+      // session advances itself rather than making a human type `inzo mode
+      // build`. `cowork` stays put — see modeOnPlanLock.
+      if (locked && pairing.session) {
+        const next = modeOnPlanLock(pairing.session.mode);
+        if (next) {
+          const advanced = { ...pairing.session, mode: next };
+          this.ctx.storage.sql.exec(`UPDATE pairing SET session = ?`, serializeSessionDescriptor(advanced));
+          this.broadcast("session.updated", { session: advanced });
+        }
+      }
+
       return consentRecord ? { ...plan, consent: consentRecord } : plan;
     });
   }
