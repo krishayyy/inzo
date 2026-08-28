@@ -9,6 +9,11 @@ import { CredentialStore } from "./credentialStore.js";
 import { planSubjectHash, type ConsentRecord } from "./consent.js";
 import { beginPlanWait, type WaitHandle } from "./agentrun.js";
 import type { Jwk } from "./credential.js";
+import {
+  parseSessionDescriptor,
+  serializeSessionDescriptor,
+  type SessionDescriptor,
+} from "inzo-protocol";
 import type { Assurance } from "./audit.js";
 import {
   ALL_SCOPES,
@@ -126,6 +131,11 @@ const LATE_COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   // pairing; NULL on the bootstrap code minted by createPairingCode().
   { table: "pairing_codes", column: "pairing_id", ddl: "TEXT" },
   { table: "pairings", column: "approval_policy", ddl: "TEXT NOT NULL DEFAULT 'unanimous'" },
+  // The session descriptor (mode + repo). Attached to the CODE at creation
+  // because a pairing does not exist until someone joins, yet the joiner needs
+  // to know what to clone at join time; copied onto the pairing on join.
+  { table: "pairing_codes", column: "session", ddl: "TEXT" },
+  { table: "pairings", column: "session", ddl: "TEXT" },
 ];
 
 interface PairingCodeRow {
@@ -135,6 +145,7 @@ interface PairingCodeRow {
   created_at: string;
   expires_at: string;
   used_at: string | null;
+  session: string | null;
 }
 
 interface PairingRow {
@@ -144,6 +155,7 @@ interface PairingRow {
   agent_b: string;
   approval_policy: string;
   created_at: string;
+  session: string | null;
 }
 
 interface MessageRow {
@@ -256,7 +268,7 @@ export class RelayStore {
    * absent we fall back to a v2 opaque token, which authenticates but cannot
    * prove possession and is therefore barred from giving consent.
    */
-  createPairingCode(cnf?: { jwk: Jwk }): PairingCode & {
+  createPairingCode(cnf?: { jwk: Jwk }, session?: SessionDescriptor | null): PairingCode & {
     agentId: string;
     agentToken: string;
     scope: Scope[];
@@ -276,10 +288,16 @@ export class RelayStore {
       try {
         this.db
           .prepare(
-            `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at)
-             VALUES (?, ?, NULL, ?, ?, NULL)`,
+            `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at, session)
+             VALUES (?, ?, NULL, ?, ?, NULL, ?)`,
           )
-          .run(code, creatorAgentId, now.toISOString(), expiresAt.toISOString());
+          .run(
+            code,
+            creatorAgentId,
+            now.toISOString(),
+            expiresAt.toISOString(),
+            session ? serializeSessionDescriptor(session) : null,
+          );
         this.db
           .prepare(
             `INSERT INTO agent_tokens (token_hash, agent_id, pairing_id, scope, revoked_at, created_at)
@@ -339,10 +357,17 @@ export class RelayStore {
       try {
         this.db
           .prepare(
-            `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at)
-             VALUES (?, ?, ?, ?, ?, NULL)`,
+            `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at, session)
+             VALUES (?, ?, ?, ?, ?, NULL, ?)`,
           )
-          .run(code, inviterAgentId, pairingId, now.toISOString(), expiresAt.toISOString());
+          .run(
+            code,
+            inviterAgentId,
+            pairingId,
+            now.toISOString(),
+            expiresAt.toISOString(),
+            pairing.session ? serializeSessionDescriptor(pairing.session) : null,
+          );
         return this.rowToPairingCode(this.getPairingCodeRow(code)!);
       } catch (err: unknown) {
         if (err instanceof Error && err.message.includes("UNIQUE")) continue;
@@ -380,6 +405,11 @@ export class RelayStore {
       return this.joinExistingPairing(row.pairing_id, row.code, joinerAgentId, agentToken, scope, cnf);
     }
 
+    // The descriptor rides on the code so a joiner learns what to clone in the
+    // join response itself, with no second round trip and no window where the
+    // pairing exists but its repo is unknown.
+    const codeSession = parseSessionDescriptor(row.session);
+
     const pairing: Pairing = {
       id: generateId("pairing"),
       code,
@@ -388,13 +418,21 @@ export class RelayStore {
       members: [row.creator_agent_id, joinerAgentId],
       approvalPolicy: "unanimous",
       createdAt: new Date().toISOString(),
+      session: codeSession,
     };
 
     const tx = this.db.transaction(() => {
       this.db.prepare(`UPDATE pairing_codes SET used_at = ? WHERE code = ?`).run(new Date().toISOString(), code);
       this.db
-        .prepare(`INSERT INTO pairings (id, code, agent_a, agent_b, created_at) VALUES (?, ?, ?, ?, ?)`)
-        .run(pairing.id, code, pairing.agentA, pairing.agentB, pairing.createdAt);
+        .prepare(`INSERT INTO pairings (id, code, agent_a, agent_b, created_at, session) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(
+          pairing.id,
+          code,
+          pairing.agentA,
+          pairing.agentB,
+          pairing.createdAt,
+          codeSession ? serializeSessionDescriptor(codeSession) : null,
+        );
       this.db.prepare(`UPDATE agent_tokens SET pairing_id = ? WHERE agent_id = ?`).run(pairing.id, pairing.agentA);
       this.db
         .prepare(
@@ -635,6 +673,28 @@ export class RelayStore {
       throw notFound(`No pairing "${pairingId}"`);
     }
     return this.rowToPairing(row);
+  }
+
+  /** The pairing's session descriptor (mode + repo), or null if never set. */
+  getSession(pairingId: string): SessionDescriptor | null {
+    return this.getPairing(pairingId).session;
+  }
+
+  /**
+   * Replaces the pairing's session descriptor.
+   *
+   * Changing the mode never changes anyone's credential: scope is fixed at
+   * mint and only narrows, and binding mode to scope would put friction on
+   * every step of the normal research -> plan -> build progression. A mode
+   * selects local sandbox policy and agent playbook, nothing more.
+   */
+  setSession(pairingId: string, agentId: string, session: SessionDescriptor): SessionDescriptor {
+    const pairing = this.getPairing(pairingId);
+    this.assertMember(pairing, agentId);
+    this.db
+      .prepare(`UPDATE pairings SET session = ? WHERE id = ?`)
+      .run(serializeSessionDescriptor(session), pairingId);
+    return session;
   }
 
   /** Full membership of a pairing, in join order. */
@@ -1123,6 +1183,7 @@ export class RelayStore {
       createdAt: row.created_at,
       expiresAt: row.expires_at,
       usedAt: row.used_at,
+      session: parseSessionDescriptor(row.session),
     };
   }
 
@@ -1135,6 +1196,7 @@ export class RelayStore {
       members: this.getMembers(row.id),
       approvalPolicy: (row.approval_policy as Pairing["approvalPolicy"]) ?? "unanimous",
       createdAt: row.created_at,
+      session: parseSessionDescriptor(row.session),
     };
   }
 

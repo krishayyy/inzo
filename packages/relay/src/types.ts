@@ -1,5 +1,7 @@
 /** Shared domain types for the relay service. */
 
+import type { SessionDescriptor } from "inzo-protocol";
+
 /**
  * Capabilities a token may carry. A token's scope is fixed at issue time to
  * ALL_SCOPES and can only ever be narrowed (never widened) afterwards — see
@@ -22,6 +24,8 @@ export interface PairingCode {
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
+  /** Session descriptor carried by this code, copied onto the pairing on join. */
+  session: SessionDescriptor | null;
 }
 
 export type ApprovalPolicy = "unanimous";
@@ -38,6 +42,8 @@ export interface Pairing {
    *  be added later without a second migration. */
   approvalPolicy: ApprovalPolicy;
   createdAt: string;
+  /** Mode + repo for this session. Null until one is set. */
+  session: SessionDescriptor | null;
 }
 
 /** What a bearer token resolves to server-side. Never built from a request body. */

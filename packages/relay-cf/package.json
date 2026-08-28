@@ -2,7 +2,7 @@
   "name": "inzo-relay-cf",
   "version": "0.1.0",
   "private": true,
-  "description": "Inzo relay on Cloudflare Workers + Durable Objects — free-tier, always-on alternative to the Node/SQLite relay in packages/relay.",
+  "description": "Inzo relay on Cloudflare Workers + Durable Objects \u2014 free-tier, always-on alternative to the Node/SQLite relay in packages/relay.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
@@ -17,5 +17,8 @@
     "typescript": "^5.7.2",
     "vitest": "^2.1.9",
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "inzo-protocol": "*"
   }
 }

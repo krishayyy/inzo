@@ -18,7 +18,8 @@
   "dependencies": {
     "@agentrun/sdk": "^0.0.5",
     "better-sqlite3": "^11.8.1",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "inzo-protocol": "*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

@@ -13,6 +13,11 @@
  * pairing hard isolation: a bug or bad request against one pairing's Durable
  * Object cannot touch another's state, by construction, not by convention.
  */
+import {
+  parseSessionDescriptor,
+  serializeSessionDescriptor,
+  type SessionDescriptor,
+} from "inzo-protocol";
 import { DurableObject } from "cloudflare:workers";
 import { createPrivateKey, createPublicKey, randomUUID, type KeyObject } from "node:crypto";
 import {
@@ -100,6 +105,9 @@ const LATE_COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   // Set only on an invite code minted by createInviteCode() for an EXISTING
   // pairing; NULL on the bootstrap code minted by createPairingCode().
   { table: "pairing_codes", column: "pairing_id", ddl: "TEXT" },
+  // Session descriptor (mode + repo) carried by the code, so a joiner
+  // learns what to clone in the join response with no second round trip.
+  { table: "pairing_codes", column: "session", ddl: "TEXT" },
 ];
 
 export interface CreatedPairingCode {
@@ -111,6 +119,8 @@ export interface CreatedPairingCode {
   principalId: string | null;
   credential: string | null;
   expiresAt: string;
+  /** Descriptor carried by this code, copied onto the pairing on join. */
+  session: SessionDescriptor | null;
 }
 
 export interface JoinedPairing {
@@ -126,6 +136,8 @@ export interface JoinedPairing {
   /** True for the bootstrap join (worker must room.initialize()); false for
    *  a 3rd+ member joining via an invite code (worker must room.addMember()). */
   isNewPairing: boolean;
+  /** Descriptor the joiner needs to know what to clone. */
+  session: SessionDescriptor | null;
 }
 
 export interface RevokeResult {
@@ -418,7 +430,7 @@ export class Registry extends DurableObject<Env> {
   // Pairing codes
   // -----------------------------------------------------------------------
 
-  createPairingCode(cnf?: { jwk: Jwk }): CreatedPairingCode {
+  createPairingCode(cnf?: { jwk: Jwk }, session?: SessionDescriptor | null): CreatedPairingCode {
     const creatorAgentId = generateId("agent");
     const agentToken = generateAgentToken();
     const scope = [...ALL_SCOPES];
@@ -431,11 +443,12 @@ export class Registry extends DurableObject<Env> {
       if (existing.length > 0) continue;
 
       this.ctx.storage.sql.exec(
-        `INSERT INTO pairing_codes (code, creator_agent_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)`,
+        `INSERT INTO pairing_codes (code, creator_agent_id, created_at, expires_at, used_at, session) VALUES (?, ?, ?, ?, NULL, ?)`,
         code,
         creatorAgentId,
         now.toISOString(),
         expiresAt.toISOString(),
+        session ? serializeSessionDescriptor(session) : null,
       );
       this.ctx.storage.sql.exec(
         `INSERT INTO agent_tokens (token_hash, agent_id, pairing_id, scope, revoked_at, created_at) VALUES (?, ?, NULL, ?, NULL, ?)`,
@@ -452,7 +465,7 @@ export class Registry extends DurableObject<Env> {
         credential = this.issueRoot({ agentId: creatorAgentId, principalId, pairingId: null, cap: scope, cnf }).credential;
       }
 
-      return { code, agentId: creatorAgentId, agentToken, scope, pairingId: null, principalId, credential, expiresAt: expiresAt.toISOString() };
+      return { code, agentId: creatorAgentId, agentToken, scope, pairingId: null, principalId, credential, expiresAt: expiresAt.toISOString(), session: session ?? null };
     }
     throw new Error("Failed to generate a unique pairing code");
   }
@@ -465,7 +478,11 @@ export class Registry extends DurableObject<Env> {
    * room.getPairing) before this is called, since Registry does not own
    * pairing membership — PairingRoom does.
    */
-  createInviteCode(pairingId: string, inviterAgentId: string): { code: string; expiresAt: string } {
+  createInviteCode(
+    pairingId: string,
+    inviterAgentId: string,
+    session?: SessionDescriptor | null,
+  ): { code: string; expiresAt: string } {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + PAIRING_CODE_TTL_MS);
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -474,12 +491,13 @@ export class Registry extends DurableObject<Env> {
       if (existing.length > 0) continue;
 
       this.ctx.storage.sql.exec(
-        `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)`,
+        `INSERT INTO pairing_codes (code, creator_agent_id, pairing_id, created_at, expires_at, used_at, session) VALUES (?, ?, ?, ?, ?, NULL, ?)`,
         code,
         inviterAgentId,
         pairingId,
         now.toISOString(),
         expiresAt.toISOString(),
+        session ? serializeSessionDescriptor(session) : null,
       );
       return { code, expiresAt: expiresAt.toISOString() };
     }
@@ -513,7 +531,15 @@ export class Registry extends DurableObject<Env> {
       }
 
       let row:
-        | { code: string; creator_agent_id: string; pairing_id: string | null; created_at: string; expires_at: string; used_at: string | null }
+        | {
+            code: string;
+            creator_agent_id: string;
+            pairing_id: string | null;
+            created_at: string;
+            expires_at: string;
+            used_at: string | null;
+            session: string | null;
+          }
         | undefined;
       try {
         row = [...this.ctx.storage.sql.exec(`SELECT * FROM pairing_codes WHERE code = ?`, code)][0] as typeof row;
@@ -565,6 +591,7 @@ export class Registry extends DurableObject<Env> {
           principalId,
           credential,
           isNewPairing: false,
+          session: parseSessionDescriptor(row.session),
         };
       }
 
@@ -598,6 +625,7 @@ export class Registry extends DurableObject<Env> {
         peerAgentId: row.creator_agent_id,
         principalId,
         credential,
+        session: parseSessionDescriptor(row.session),
         isNewPairing: true,
       };
     });

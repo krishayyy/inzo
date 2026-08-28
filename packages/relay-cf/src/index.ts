@@ -6,6 +6,11 @@
  * dispatches the actual operation to the right PairingRoom instance. Kept
  * deliberately thin — business rules live in the DOs, not here.
  */
+import {
+  InvalidSessionDescriptorError,
+  validateSessionDescriptor,
+  type SessionDescriptor,
+} from "inzo-protocol";
 import { timingSafeEqual } from "node:crypto";
 import {
   badRequest,
@@ -265,9 +270,18 @@ async function route(req: Request, env: Env): Promise<Response> {
 
   // POST /pairings — create a pairing code
   if (req.method === "POST" && parts.length === 1 && parts[0] === "pairings") {
-    const body = (await readJson(req)) as { cnf?: { jwk: unknown } };
+    const body = (await readJson(req)) as { cnf?: { jwk: unknown }; session?: unknown };
     const cnf = body.cnf ? (body.cnf as { jwk: import("./lib.js").Jwk }) : undefined;
-    const result = await registry.createPairingCode(cnf);
+    // The descriptor rides on the code, not the pairing: no pairing exists yet,
+    // but the joiner needs to know what to clone the moment they join.
+    let session: SessionDescriptor | null = null;
+    try {
+      session = body.session === undefined || body.session === null ? null : validateSessionDescriptor(body.session);
+    } catch (err) {
+      if (err instanceof InvalidSessionDescriptorError) throw badRequest(err.message);
+      throw err;
+    }
+    const result = await registry.createPairingCode(cnf, session);
     return json(result, 201);
   }
 
@@ -287,7 +301,7 @@ async function route(req: Request, env: Env): Promise<Response> {
 
     let members: string[];
     if (joined.isNewPairing) {
-      await room.initialize(joined.pairingId, code, joined.agentA, joined.agentB, new Date().toISOString());
+      await room.initialize(joined.pairingId, code, joined.agentA, joined.agentB, new Date().toISOString(), joined.session);
       await room.appendAudit("pairing.created", joinerActor, joinerAssurance, { code });
       await room.appendAudit("pairing.joined", joinerActor, joinerAssurance, { peerAgentId: joined.agentA });
       members = [joined.agentA, joined.agentB];
@@ -300,6 +314,11 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json(
       {
         pairingId: joined.pairingId,
+        // The joiner's own id, under the same name packages/relay uses. Without
+        // it the CLI writes `agentId: undefined` into its session file, and then
+        // renders your own messages as the peer's and re-prompts you to approve
+        // a plan you already approved.
+        agentId: joined.agentB,
         agentA: joined.agentA,
         agentB: joined.agentB,
         code: joined.code,
@@ -309,6 +328,7 @@ async function route(req: Request, env: Env): Promise<Response> {
         principalId: joined.principalId,
         credential: joined.credential,
         members,
+        session: joined.session,
       },
       201,
     );
@@ -326,7 +346,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (pairing.members.length >= 8) {
       throw badRequest(`Pairing "${pairingIdForInvite}" already has the maximum of 8 members`);
     }
-    const invite = await registry.createInviteCode(pairingIdForInvite, auth.agentId);
+    const currentSession = unwrap(await inviteRoom.getSession());
+    const invite = await registry.createInviteCode(pairingIdForInvite, auth.agentId, currentSession);
     return json({ code: invite.code, expiresAt: invite.expiresAt }, 201);
   }
 
@@ -462,6 +483,29 @@ async function route(req: Request, env: Env): Promise<Response> {
     const rawLimit = Number(url.searchParams.get("limit") ?? 10);
     const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 10;
     return json(unwrap(await room.getDigest(limit)));
+  }
+
+  if (sub === "session" && req.method === "GET") {
+    return json({ session: unwrap(await room.getSession()) });
+  }
+
+  // Requires plan:propose rather than a scope of its own: setting the mode is
+  // the same class of act as proposing what the team works on. It never widens
+  // anyone's authority — scope is fixed at mint and only narrows.
+  if (sub === "session" && req.method === "POST") {
+    requireScope(auth, "plan:propose");
+    // `rawBody` is the already-read body — the request stream is consumed by
+    // the time this runs, so re-reading it throws.
+    const { session: proposed } = (rawBody ?? {}) as { session?: unknown };
+    let descriptor: SessionDescriptor;
+    try {
+      descriptor = validateSessionDescriptor(proposed);
+    } catch (err) {
+      if (err instanceof InvalidSessionDescriptorError) throw badRequest(err.message);
+      throw err;
+    }
+    const saved = unwrap(await room.setSession(auth.agentId, descriptor));
+    return json({ session: saved });
   }
 
   if (sub === "plan" && req.method === "POST") {

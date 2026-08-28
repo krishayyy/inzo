@@ -3,6 +3,7 @@ import { requireAuth } from "../lib/auth.js";
 import { badRequest, rateLimited, RelayError } from "../lib/errors.js";
 import { FailureLimiter } from "../lib/rateLimit.js";
 import { parseCnf } from "../lib/credential.js";
+import { InvalidSessionDescriptorError, validateSessionDescriptor } from "inzo-protocol";
 import type { RelayStore } from "../lib/store.js";
 
 export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()): Router {
@@ -10,12 +11,24 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
 
   // POST /pairings — create a short-lived pairing code and issue the creator's
   // credential. The token is returned exactly once and never retrievable again.
-  router.post("/", (req, res) => {
+  router.post("/", (req, res, next) => {
     // `cnf` is the caller's locally-generated Ed25519 public key. Supply it and
     // you get a signed v3 credential bound to a key we never see; omit it and
     // you get a v2 bearer token, which cannot give consent.
     const cnf = req.body?.cnf === undefined ? undefined : parseCnf(req.body.cnf);
-    const pairingCode = store.createPairingCode(cnf);
+    // The descriptor attaches to the CODE, not the pairing: no pairing exists
+    // yet, but the joiner needs to know what to clone the moment they join.
+    let session = null;
+    try {
+      session =
+        req.body?.session === undefined || req.body?.session === null
+          ? null
+          : validateSessionDescriptor(req.body.session);
+    } catch (err) {
+      if (err instanceof InvalidSessionDescriptorError) return next(badRequest(err.message));
+      return next(err);
+    }
+    const pairingCode = store.createPairingCode(cnf, session);
     res.status(201).json({
       code: pairingCode.code,
       expiresAt: pairingCode.expiresAt,
@@ -26,6 +39,7 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
       scope: pairingCode.scope,
       cap: pairingCode.scope,
       pairingId: null,
+      session: pairingCode.session,
     });
   });
 
@@ -56,6 +70,7 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
         cap: pairing.scope,
         peerAgentId: pairing.peerAgentId,
         members: pairing.members,
+        session: pairing.session,
       });
     } catch (err) {
       if (err instanceof RelayError && [404, 409, 410].includes(err.status)) limiter.recordFailure(key);
@@ -92,6 +107,7 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
         agentId: identity.agentId,
         members: pairing.members,
         approvalPolicy: pairing.approvalPolicy,
+        session: pairing.session,
         peerAgentId,
         createdAt: pairing.createdAt,
         budget: store.getBudget(pairing.id),

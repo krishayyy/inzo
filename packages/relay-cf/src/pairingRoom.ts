@@ -15,6 +15,11 @@
  * helpers that are never called across the RPC boundary keep normal
  * throw/catch semantics; the `OrThrow` suffix marks those.
  */
+import {
+  parseSessionDescriptor,
+  serializeSessionDescriptor,
+  type SessionDescriptor,
+} from "inzo-protocol";
 import { DurableObject } from "cloudflare:workers";
 import {
   AUDIT_SCHEMA,
@@ -71,7 +76,8 @@ CREATE TABLE IF NOT EXISTS pairing (
   agent_a TEXT NOT NULL,
   agent_b TEXT NOT NULL,
   approval_policy TEXT NOT NULL DEFAULT 'unanimous',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  session TEXT
 );
 
 -- Full membership. agent_a/agent_b above stay populated for back-compat
@@ -212,14 +218,22 @@ export class PairingRoom extends DurableObject<Env> {
     this.ctx.storage.sql.exec(SCHEMA);
   }
 
-  initialize(id: string, code: string, agentA: string, agentB: string, createdAt: string): void {
+  initialize(
+    id: string,
+    code: string,
+    agentA: string,
+    agentB: string,
+    createdAt: string,
+    session?: SessionDescriptor | null,
+  ): void {
     this.ctx.storage.sql.exec(
-      `INSERT OR IGNORE INTO pairing (id, code, agent_a, agent_b, created_at) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO pairing (id, code, agent_a, agent_b, created_at, session) VALUES (?, ?, ?, ?, ?, ?)`,
       id,
       code,
       agentA,
       agentB,
       createdAt,
+      session ? serializeSessionDescriptor(session) : null,
     );
     this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO pairing_members (agent_id, joined_at) VALUES (?, ?)`, agentA, createdAt);
     this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO pairing_members (agent_id, joined_at) VALUES (?, ?)`, agentB, createdAt);
@@ -330,7 +344,15 @@ export class PairingRoom extends DurableObject<Env> {
 
   private getPairingOrThrow(): Pairing {
     const row = [...this.ctx.storage.sql.exec(`SELECT * FROM pairing LIMIT 1`)][0] as
-      | { id: string; code: string; agent_a: string; agent_b: string; approval_policy: string; created_at: string }
+      | {
+        id: string;
+        code: string;
+        agent_a: string;
+        agent_b: string;
+        approval_policy: string;
+        created_at: string;
+        session: string | null;
+      }
       | undefined;
     if (!row) throw notFound("This pairing does not exist");
     return {
@@ -341,6 +363,7 @@ export class PairingRoom extends DurableObject<Env> {
       members: this.getMembers(),
       approvalPolicy: (row.approval_policy as Pairing["approvalPolicy"]) ?? "unanimous",
       createdAt: row.created_at,
+      session: parseSessionDescriptor(row.session),
     };
   }
 
@@ -352,6 +375,30 @@ export class PairingRoom extends DurableObject<Env> {
 
   getPairing(): RpcResult<Pairing> {
     return rpcSafe(() => this.getPairingOrThrow());
+  }
+
+  getSession(): RpcResult<SessionDescriptor | null> {
+    return rpcSafe(() => {
+      const row = [...this.ctx.storage.sql.exec(`SELECT session FROM pairing LIMIT 1`)][0] as
+        | { session: string | null }
+        | undefined;
+      return parseSessionDescriptor(row?.session ?? null);
+    });
+  }
+
+  /**
+   * Replaces the session descriptor.
+   *
+   * Changing the mode never changes a credential: scope is fixed at mint and
+   * only narrows. A mode selects local sandbox policy and agent playbook.
+   */
+  setSession(agentId: string, session: SessionDescriptor): RpcResult<SessionDescriptor> {
+    return rpcSafe(() => {
+      this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
+      this.ctx.storage.sql.exec(`UPDATE pairing SET session = ?`, serializeSessionDescriptor(session));
+      this.broadcast("session.updated", { session });
+      return session;
+    });
   }
 
   assertMember(pairing: Pairing, agentId: string): RpcResult<void> {
@@ -439,6 +486,9 @@ export class PairingRoom extends DurableObject<Env> {
       version: row.version,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // This relay has no AgentRun integration; null is accurate, not a stub.
+      sandboxId: null,
+      sandboxState: null,
     };
   }
 
@@ -543,7 +593,20 @@ export class PairingRoom extends DurableObject<Env> {
       const createdAt = existing?.created_at ?? now;
       const version = (existing?.version ?? 0) + 1;
 
-      const plan: Plan = { pairingId, goal, items, proposedBy, approvedBy: [], locked: false, version, createdAt, updatedAt: now };
+      const plan: Plan = {
+        pairingId,
+        goal,
+        items,
+        proposedBy,
+        approvedBy: [],
+        locked: false,
+        version,
+        createdAt,
+        updatedAt: now,
+        // This relay has no AgentRun integration; null is accurate, not a stub.
+        sandboxId: null,
+        sandboxState: null,
+      };
 
       this.ctx.storage.sql.exec(
         `INSERT INTO plans (pairing_id, goal, items, proposed_by, approved_by, locked, version, created_at, updated_at)

@@ -25,6 +25,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # relay-cf is not in the root build chain (it deploys via wrangler), so
+      # `build` alone never typechecks it. Without this step it silently drifted
+      # from packages/relay's shared types — the two relays implement the same
+      # protocol independently, and nothing else catches that.
+      - run: npm run typecheck
       - run: npm run test:only
 
   docker:

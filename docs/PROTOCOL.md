@@ -298,6 +298,77 @@ peer-originated work without waiting for the relay to reject it.
 
 ---
 
+### 3.4 Session descriptor
+
+A pairing carries a **session descriptor**: which mode the team is in, and
+which repo and branch they share.
+
+```jsonc
+{ "mode": "cowork" | "plan" | "build" | "research",
+  "repo": { "url": string | null, "branch": string, "name": string } | null }
+```
+
+**The descriptor attaches to the CODE, not the pairing.** A pairing does not
+exist until someone joins, but the joiner needs to know what to clone *at join
+time*. So `POST /pairings` accepts an optional `session`, stores it on the code
+row, and `POST /pairings/:code/join` copies it onto the pairing and returns it
+in the join response. No second round trip, and no window in which the pairing
+exists but its repo is unknown.
+
+An **invite code inherits the pairing's current descriptor**, not the
+descriptor the bootstrap code carried. A fifth member must land on the same
+branch as the second, even if the mode or repo changed after the original code
+was minted.
+
+**A mode never changes a credential.** Scope is fixed at mint and only ever
+narrows (§2). The normal team workflow — `research` -> `plan` -> `build` — is
+monotonically *widening* in what it needs, so binding mode to scope would put
+friction on every step of the main path and make the alternative path the cheap
+one. Instead the phase gate is the consent gate that already exists: peer
+commands require a locked plan (§6, §8), so during research there is no plan,
+during planning the plan is not locked, and when it locks the team is by
+definition building. A mode selects local sandbox policy and agent playbook,
+nothing more.
+
+The stronger "structurally cannot run commands, verifiable offline" property is
+still available — as an explicit, opt-in narrowing via §2 attenuation, which is
+where it belongs for pairing outside your own organization.
+
+#### `GET /pairings/:id/session`
+
+Any member. Returns `{ "session": <descriptor> | null }`.
+
+#### `POST /pairings/:id/session`
+
+Requires `plan:propose` — setting the mode is the same class of act as
+proposing what the team works on. Replaces the descriptor and publishes a
+`session.updated` event on the pairing's stream.
+
+#### Validation
+
+Every field is validated server-side, and a violation is `400`. This is not
+peer defense; it is storage integrity and cross-relay agreement.
+
+| Field | Rule |
+|---|---|
+| `mode` | one of the four literals |
+| `repo.url` | `https://`, `ssh://`, or `user@host:path` only; <= 512 bytes; no control characters, whitespace, or leading `-` |
+| `repo.branch` | `[A-Za-z0-9._/-]{1,200}`, no `..`, no leading `-`, no leading/trailing/doubled `/`, no `.lock` suffix |
+| `repo.name` | a bare basename, `[A-Za-z0-9._-]{1,100}`, not `.` or `..` |
+
+The URL rule is the load-bearing one. That value becomes an argument to
+`git clone` on every joiner's machine, and the relay is explicitly **not** a
+trusted source of truth (§11) — it is a transport and witness. A crafted
+descriptor otherwise yields code execution on join: `ext::sh -c '...'` runs a
+shell command through git's ext transport, a leading `-` is argument
+injection, and `file://` clones local disk. Hence an allowlist, not a
+denylist. Clients additionally pass
+`-c protocol.ext.allow=never -c protocol.file.allow=never` and `--`.
+
+Because a divergence here would be a *security* divergence rather than a
+cosmetic one, the rule is implemented once in `packages/protocol` and imported
+by both relays, rather than written twice.
+
 ## 4. Revocation
 
 Either principal may revoke either credential, immediately and without the
@@ -766,5 +837,23 @@ An implementation is v3-conformant if it:
    a verifiable chain.
 9. Never executes a shared command outside the sandbox, and refuses when the
    sandbox is unavailable.
+10. Stores a session descriptor on the code, copies it onto the pairing at
+    join, returns it in the join response, and has invite codes inherit the
+    pairing's *current* descriptor (§3.4).
+11. Rejects a malformed descriptor with `400`, by the table in §3.4.
 
 `packages/relay/src/test` is the executable form of this list.
+
+### 12.1 Cross-relay conformance
+
+`packages/relay` and `packages/relay-cf` are independent implementations of
+this document. `packages/conformance/suite.ts` is a single set of assertions
+run against **both**, each supplying only its own transport, so the two cannot
+drift apart quietly. Adding a route to one relay without the other now fails a
+test rather than being discovered by a user whose teammate is on the other
+deployment.
+
+This is not hypothetical: writing that suite found relay-cf's join response
+missing `agentId`, a field the CLI writes straight into its session file. On
+the default hosted relay that made `inzo watch` render your own messages as the
+peer's and re-prompt you to approve a plan you had already approved.
