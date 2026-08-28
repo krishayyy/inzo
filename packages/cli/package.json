@@ -49,6 +49,7 @@
     "agent-coordination"
   ],
   "dependencies": {
-    "inzo-holder": "*"
+    "inzo-holder": "*",
+    "inzo-protocol": "*"
   }
 }

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { SessionDescriptor } from "inzo-protocol";
 import { legacySessionFilePath, readCurrentPointer, sessionFilePathFor } from "inzo-holder";
 
 export interface SessionFile {
@@ -15,6 +16,8 @@ export interface SessionFile {
   principalId?: string | null;
   /** The directory this session is scoped to. Absent on legacy sessions. */
   workspace?: string;
+  /** Mode + repo, as agreed at start/join. Absent on pre-descriptor sessions. */
+  session?: SessionDescriptor | null;
   updatedAt: string;
 }
 

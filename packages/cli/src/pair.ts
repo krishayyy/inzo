@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { generateHolderKeyPair, sessionFilePathFor, writeCurrentPointer } from "inzo-holder";
+import type { SessionDescriptor } from "inzo-protocol";
 import { createApi } from "./api.js";
 import { style } from "./render.js";
 import { loadSession, requirePairing, resolveWorkspace, type SessionFile } from "./session.js";
@@ -10,9 +11,9 @@ import { loadSession, requirePairing, resolveWorkspace, type SessionFile } from 
  * pairing must point at the same relay, so the CLI's bootstrap default has to
  * match the MCP server's, not just read INZO_RELAY_URL independently.
  */
-const RELAY_URL = process.env.INZO_RELAY_URL ?? "https://inzo-relay-cf.krishaysuresh1.workers.dev";
+export const RELAY_URL = process.env.INZO_RELAY_URL ?? "https://inzo-relay-cf.krishaysuresh1.workers.dev";
 
-interface CreatePairingResponse {
+export interface CreatePairingResponse {
   code: string;
   expiresAt: string;
   agentId: string;
@@ -20,9 +21,10 @@ interface CreatePairingResponse {
   scope: string[];
   principalId: string | null;
   credential: string | null;
+  session?: SessionDescriptor | null;
 }
 
-interface JoinPairingResponse {
+export interface JoinPairingResponse {
   pairingId: string;
   agentId: string;
   agentToken: string;
@@ -30,9 +32,10 @@ interface JoinPairingResponse {
   peerAgentId: string;
   principalId: string | null;
   credential: string | null;
+  session?: SessionDescriptor | null;
 }
 
-async function relayPost<T>(path: string, body: unknown): Promise<T> {
+export async function relayPost<T>(path: string, body: unknown): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${RELAY_URL}${path}`, {
@@ -61,7 +64,7 @@ async function relayPost<T>(path: string, body: unknown): Promise<T> {
  * overwrite the first project's holder private key — the bug workspace keying
  * exists to fix.
  */
-function writeSession(fields: Omit<SessionFile, "relayUrl" | "updatedAt">): string {
+export function writeSession(fields: Omit<SessionFile, "relayUrl" | "updatedAt">): string {
   const workspace = resolveWorkspace();
   const target = sessionFilePathFor(workspace);
   const payload: SessionFile = {
@@ -84,8 +87,8 @@ function writeSession(fields: Omit<SessionFile, "relayUrl" | "updatedAt">): stri
  * README. Only touches the "inzo" key — any other configured MCP server is
  * left untouched.
  */
-export function mergeMcpConfig(): string {
-  const path = join(process.cwd(), ".mcp.json");
+export function mergeMcpConfig(dir = process.cwd()): string {
+  const path = join(dir, ".mcp.json");
   let config: { mcpServers?: Record<string, unknown> } = {};
   if (existsSync(path)) {
     try {
@@ -98,7 +101,7 @@ export function mergeMcpConfig(): string {
   config.mcpServers.inzo = {
     command: "npx",
     args: ["-y", "inzo-mcp"],
-    env: { INZO_WORKSPACE: process.cwd() },
+    env: { INZO_WORKSPACE: dir },
   };
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
   return path;

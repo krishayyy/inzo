@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { approve, audit, budget, revoke, status, watch, withdraw } from "./commands.js";
 import { invite, pair } from "./pair.js";
+import { isUsageError, join, start } from "./start.js";
 import { sessionFilePath } from "./session.js";
 import { style } from "./render.js";
 
@@ -9,6 +10,9 @@ const VERSION = "0.1.0";
 
 const USAGE = `inzo — pair, watch, and control an agent pairing
 
+  inzo start [mode|repo|name]
+                             start a session here and print a code to share
+  inzo join <code>           join a teammate's session: repo, branch, and mode
   inzo pair                  create a pairing code and wire up .mcp.json here
   inzo pair <code>           join a pairing code a teammate shared with you
   inzo pair --invite <n>     invite <n> more teammates into your active pairing
@@ -58,6 +62,12 @@ async function main(argv: string[]): Promise<number> {
   }
 
   switch (command) {
+    case "start":
+      await start(rest);
+      return 0;
+    case "join":
+      await join(rest);
+      return 0;
     case "pair": {
       if (rest[0] === "--invite") {
         const count = Number(rest[1]);
@@ -112,5 +122,7 @@ main(process.argv.slice(2))
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
     process.stderr.write(`${style.red(err instanceof Error ? err.message : String(err))}\n`);
-    process.exit(1);
+    // Usage errors exit 2 so a script can tell "you typed it wrong" from
+    // "it ran and failed" — see the CLI conventions in the plan.
+    process.exit(isUsageError(err) ? 2 : 1);
   });
