@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { approve, audit, budget, revoke, status, watch, withdraw } from "./commands.js";
 import { invite, pair } from "./pair.js";
+import { doctor } from "./doctor.js";
+import { done } from "./done.js";
 import { mode } from "./mode.js";
 import { isUsageError, join, start } from "./start.js";
 import { sync } from "./sync.js";
@@ -17,6 +19,8 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo join <code>           join a teammate's session: repo, branch, and mode
   inzo mode [<mode>]         show or set research | plan | build | cowork
   inzo sync                  pull --rebase --autostash, then push. Never --force.
+  inzo done                  sync, then open a PR from the session branch
+  inzo doctor                check git, Docker, gh, the relay, and this session
   inzo pair                  create a pairing code and wire up .mcp.json here
   inzo pair <code>           join a pairing code a teammate shared with you
   inzo pair --invite <n>     invite <n> more teammates into your active pairing
@@ -53,6 +57,40 @@ function assertSupportedPlatform(): void {
   }
 }
 
+const COMMANDS = [
+  "start",
+  "join",
+  "mode",
+  "sync",
+  "done",
+  "doctor",
+  "pair",
+  "watch",
+  "status",
+  "approve",
+  "revoke",
+  "withdraw",
+  "audit",
+  "budget",
+  "help",
+];
+
+function distance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+function nearestCommand(input: string): string | undefined {
+  return COMMANDS.find((name) => distance(input.toLowerCase(), name) <= 2);
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -78,6 +116,11 @@ async function main(argv: string[]): Promise<number> {
     case "sync":
       await sync(rest);
       return 0;
+    case "done":
+      await done(rest);
+      return 0;
+    case "doctor":
+      return await doctor(rest);
     case "pair": {
       if (rest[0] === "--invite") {
         const count = Number(rest[1]);
@@ -122,9 +165,15 @@ async function main(argv: string[]): Promise<number> {
     case undefined:
       process.stdout.write(USAGE);
       return 0;
-    default:
-      process.stderr.write(`Unknown command "${command}".\n\n${USAGE}`);
-      return 1;
+    default: {
+      const near = nearestCommand(command);
+      process.stderr.write(
+        near
+          ? `Unknown command "${command}". Did you mean "${near}"?\n`
+          : `Unknown command "${command}".\n\n${USAGE}`,
+      );
+      return 2;
+    }
   }
 }
 

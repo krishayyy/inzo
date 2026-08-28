@@ -96,27 +96,36 @@ Coordination is the feature; the trust boundary is the product.
 
 ## Quickstart
 
-**1. One person pairs, from their project directory:**
+**1. One person starts, from their project directory:**
 
 ```bash
-npx inzo pair
+npx inzo start
 ```
 
-This prints a six-character code, writes `~/.inzo/session.json`, and
-writes (or merges into) `.mcp.json` here so your agent picks up the `inzo`
-MCP server automatically — no hand-editing JSON. Send the code to your
-teammate.
+This prints a six-character code and puts your teammate in your repo when they
+use it. It infers what you meant from where you are — a git repo with a remote
+becomes a `cowork` session on it — and it writes two files and nothing else:
+the session (`~/.inzo/sessions/<key>.json`, mode `0600`) and `.mcp.json` here,
+merged so any other MCP server you have configured is left alone.
 
-**2. Your teammate joins, from their own project directory:**
+You can also say what you want outright:
 
 ```bash
-npx inzo pair <code>
+npx inzo start research          # a mode: read-only sandbox, network on
+npx inzo start owner/repo        # a repo: clone it, then start there
+npx inzo start my-app            # a name: mkdir + git init, then start there
 ```
 
-Same effect: session file written, `.mcp.json` wired up. Both of you now have
-an `inzo` MCP server configured for Claude Code, Cursor, or any MCP client —
-prefer to wire it up by hand, or if `.mcp.json` isn't your agent's config
-format (e.g. Codex's `~/.codex/config.toml`), add it yourself:
+**2. Your teammate joins, from anywhere:**
+
+```bash
+npx inzo join <code>
+```
+
+One command puts them in the same repo, on the same branch, in the same mode.
+If they are already in that repo it fetches and checks out; if not it clones;
+if the session has no repo they get a scratch project. Their `.mcp.json` is
+wired up the same way.
 
 **Growing past two.** Any current member can invite more teammates into the
 same pairing — a team, not just a pair:
@@ -125,11 +134,17 @@ same pairing — a team, not just a pair:
 npx inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
 ```
 
-Each invitee runs `npx inzo pair <code>` exactly as above. Plans require
-every member's approval to lock (unanimous, up to 8 members per pairing) —
-`"peer"` as a revoke/command-origin target only makes sense for the original
-two; for 3+ members, name the specific agentId instead (see `members` in
-`get_pairing_status`).
+Each invitee runs `npx inzo join <code>`. Plans require every member's approval
+to lock (unanimous, up to 8 members per pairing) — `"peer"` as a
+revoke/command-origin target only makes sense for the original two; for 3+
+members, name the specific agentId instead (see `members` in `get_session`).
+
+**If `.mcp.json` isn't your agent's config format** (Codex reads
+`~/.codex/config.toml`), print the block to paste:
+
+```bash
+npx inzo start --print-config --format toml
+```
 
 ```json
 {
@@ -161,12 +176,59 @@ npx inzo watch
 ```
 
 You will see the agents negotiate live, the plan appear, and a prompt to approve
-it. Nothing locks in until you both run `npx inzo approve`. If the other side's
+it — plus a presence panel showing who is on which branch with what uncommitted,
+and a line naming any file more than one of you has dirty right now. That last
+one is what two people on one repo need and cannot get from git, which only ever
+sees one working tree.
+
+Nothing locks in until you both run `npx inzo approve`. If the other side's
 agent starts doing something you don't like:
 
 ```bash
 npx inzo revoke peer
 ```
+
+**4. Work, and land it:**
+
+```bash
+npx inzo sync     # pull --rebase --autostash, then push. Never --force, ever.
+npx inzo done     # sync, then open the PR from the session branch
+```
+
+Inzo never moves a file — git does. `watch` only fetches; `sync` is the only
+writer. It refuses to run off the session branch, refuses to push a trunk
+branch, and stops and hands you back normal git conflict resolution when a
+rebase conflicts (your teammates see `CONFLICTED` next to your name).
+
+### The workflow
+
+`research` → `plan` → `build` is one progression, and it advances itself:
+
+```bash
+npx inzo start research     # agents investigate; sandbox read-only, network on
+npx inzo mode plan          # agents negotiate the goal and the task split
+   # (both humans approve)  → AUTO-ADVANCES to build; every watch shows a banner
+npx inzo done               # sync + PR
+```
+
+No re-pairing, and no credential changes at any step — modes set local sandbox
+policy and the agent's playbook, never anyone's authority. `cowork` is the
+unstructured default for "just work with me". `inzo mode` is human-only and is
+deliberately not an MCP tool: an agent should not be able to change the rules
+it operates under.
+
+### When something's wrong
+
+```bash
+npx inzo doctor
+```
+
+Checks Node, git, Docker, and `gh`, whether the relay answers, whether your
+session file is still mode `0600` (it holds the key that signs your approvals),
+and whether `.mcp.json` points at the directory you are actually in. Exits `1`
+if anything required is broken. It only ever reads.
+
+`inzo pair` / `pair <code>` still work as aliases for `start` / `join`.
 
 ## Hosting the relay
 
@@ -229,9 +291,28 @@ first, then the code.
 
 ## Status
 
-The full loop works end to end — pair, negotiate, approve, sandbox, track runway,
-revoke — with 196 tests covering it, including the SSE stream over real sockets,
-the CLI against a real relay, and the v3 trust surface driven over HTTP.
+The full loop works end to end — start, join, negotiate, approve, sandbox, sync,
+track runway, revoke, and land a PR — covered by tests including the SSE stream
+over real sockets, the CLI against a real relay, and the v3 trust surface driven
+over HTTP.
+
+**Both relays are held to one suite.** `packages/relay` (Express + SQLite) and
+`packages/relay-cf` (Workers + Durable Objects) are independent implementations
+of the same protocol, and drift between them shows up as two members of one
+session seeing different realities. `packages/conformance` runs the same
+assertions against both. It has already earned its keep: writing it found
+relay-cf omitting `agentId` from the join response, which the CLI writes
+straight into its session file — on the default hosted relay, `inzo watch` was
+rendering your own messages as the peer's.
+
+**Inzo aims to be token-negative.** Two agents pairing is structurally wasteful
+— both build the same context over the same code — and that waste is the budget
+coordination pays from. The largest fixed cost was our own: MCP tool definitions
+are re-sent on every request for the life of a session, whether or not Inzo is
+used that turn. Twenty tools ran about 2,000 tokens per request. The surface is
+now eight tools at under 600, with the cold path folded behind one `inzo_admin`
+action and the behavioral guidance moved into tool *results*, which are billed
+once. A test measures the served `tools/list` payload so it cannot grow back.
 
 **Every package speaks v3.** The MCP server generates a holder keypair at pair
 time and signs each request; the CLI signs your approval with a key that never

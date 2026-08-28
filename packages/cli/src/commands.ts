@@ -265,7 +265,20 @@ export function parseFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
+/**
+ * Never prompts when stdin is not a TTY.
+ *
+ * A confirmation that blocks forever in CI is the worst available failure —
+ * it looks like a hang, not a refusal, and the job dies on a timeout with
+ * nothing useful in the log. Refusing loudly is strictly better, and the
+ * caller can pass --yes to say what it wants up front.
+ */
 async function askYesNo(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      `${question} — but stdin is not a terminal, so this cannot be confirmed interactively. Re-run it in a terminal.`,
+    );
+  }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await rl.question(`${question} [y/N] `);
