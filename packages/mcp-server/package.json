@@ -1,6 +1,6 @@
 {
   "name": "inzo-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for Inzo \u2014 lets two paired coding agents talk to each other, propose plans, and track usage.",
   "type": "module",
   "bin": {

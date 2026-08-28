@@ -16,6 +16,16 @@ import { style } from "./render.js";
  *     no notice and no error, ever.
  */
 const CACHE_PATH = join(process.env.INZO_HOME ?? join(homedir(), ".inzo"), "update-check.json");
+
+/**
+ * The registry name, which is not what users type.
+ *
+ * npm's anti-squatting policy rejected the plain name `inzo` as too close to
+ * ini/ink/intl/minio/pino, so the package is scoped. The `inzo` bin is
+ * unchanged — only the thing you install is named differently from the thing
+ * you run.
+ */
+export const PACKAGE_NAME = "@krishaysuresh/inzo";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 interface UpdateCache {
@@ -71,7 +81,7 @@ export function updateNotice(current: string): string | null {
   if (updateCheckDisabled()) return null;
   const cache = readCache();
   if (!cache || !isNewer(cache.latest, current)) return null;
-  return style.dim(`  inzo ${cache.latest} available (you have ${current}) · npm i -g inzo`);
+  return style.dim(`  inzo ${cache.latest} available (you have ${current}) · npm i -g ${PACKAGE_NAME}`);
 }
 
 /**
@@ -83,7 +93,7 @@ export function updateNotice(current: string): string | null {
  */
 export function refreshUpdateCache(): void {
   if (updateCheckDisabled() || !isCacheStale(readCache())) return;
-  void fetch("https://registry.npmjs.org/inzo/latest", { signal: AbortSignal.timeout(3000) })
+  void fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, { signal: AbortSignal.timeout(3000) })
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
       const latest = (data as { version?: string } | null)?.version;
@@ -147,7 +157,7 @@ export function assertClientSupported(minimum: string | null | undefined, curren
   if (!minimum) return;
   if (isNewer(minimum, current)) {
     throw new Error(
-      `This session needs inzo ${minimum} or newer — you have ${current}. Run \`npm i -g inzo\` (or use \`npx inzo@latest\`).`,
+      `This session needs inzo ${minimum} or newer — you have ${current}. Run \`npm i -g ${PACKAGE_NAME}\`.`,
     );
   }
 }

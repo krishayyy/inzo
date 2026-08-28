@@ -96,10 +96,22 @@ Coordination is the feature; the trust boundary is the product.
 
 ## Quickstart
 
+**0. Get it.** One of these, once:
+
+```bash
+npm i -g @krishaysuresh/inzo     # `inzo` on PATH; recommended
+npx @krishaysuresh/inzo start    # zero-install, for a first try
+```
+
+The npm package is scoped because npm's anti-squatting policy rejected the
+plain name `inzo` (too close to ini/ink/intl/minio/pino). Only the thing you
+*install* is scoped — the command you *type* is `inzo`, and the rest of this
+README uses it directly.
+
 **1. One person starts, from their project directory:**
 
 ```bash
-npx inzo start
+inzo start
 ```
 
 This prints a six-character code and puts your teammate in your repo when they
@@ -111,15 +123,15 @@ merged so any other MCP server you have configured is left alone.
 You can also say what you want outright:
 
 ```bash
-npx inzo start research          # a mode: read-only sandbox, network on
-npx inzo start owner/repo        # a repo: clone it, then start there
-npx inzo start my-app            # a name: mkdir + git init, then start there
+inzo start research          # a mode: read-only sandbox, network on
+inzo start owner/repo        # a repo: clone it, then start there
+inzo start my-app            # a name: mkdir + git init, then start there
 ```
 
 **2. Your teammate joins, from anywhere:**
 
 ```bash
-npx inzo join <code>
+inzo join <code>
 ```
 
 One command puts them in the same repo, on the same branch, in the same mode.
@@ -131,10 +143,10 @@ wired up the same way.
 same pairing — a team, not just a pair:
 
 ```bash
-npx inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
+inzo pair --invite 2   # prints 2 fresh one-shot codes, one per teammate
 ```
 
-Each invitee runs `npx inzo join <code>`. Plans require every member's approval
+Each invitee runs `inzo join <code>`. Plans require every member's approval
 to lock (unanimous, up to 8 members per pairing) — `"peer"` as a
 revoke/command-origin target only makes sense for the original two; for 3+
 members, name the specific agentId instead (see `members` in `get_session`).
@@ -143,7 +155,7 @@ members, name the specific agentId instead (see `members` in `get_session`).
 `~/.codex/config.toml`), print the block to paste:
 
 ```bash
-npx inzo start --print-config --format toml
+inzo start --print-config --format toml
 ```
 
 ```json
@@ -172,7 +184,7 @@ There is no default, on purpose — omit it and `run_shared_command` refuses.
 **3. Both people watch, from their own terminal:**
 
 ```bash
-npx inzo watch
+inzo watch
 ```
 
 You will see the agents negotiate live, the plan appear, and a prompt to approve
@@ -181,18 +193,18 @@ and a line naming any file more than one of you has dirty right now. That last
 one is what two people on one repo need and cannot get from git, which only ever
 sees one working tree.
 
-Nothing locks in until you both run `npx inzo approve`. If the other side's
+Nothing locks in until you both run `inzo approve`. If the other side's
 agent starts doing something you don't like:
 
 ```bash
-npx inzo revoke peer
+inzo revoke peer
 ```
 
 **4. Work, and land it:**
 
 ```bash
-npx inzo sync     # pull --rebase --autostash, then push. Never --force, ever.
-npx inzo done     # sync, then open the PR from the session branch
+inzo sync     # pull --rebase --autostash, then push. Never --force, ever.
+inzo done     # sync, then open the PR from the session branch
 ```
 
 Inzo never moves a file — git does. `watch` only fetches; `sync` is the only
@@ -205,10 +217,10 @@ rebase conflicts (your teammates see `CONFLICTED` next to your name).
 `research` → `plan` → `build` is one progression, and it advances itself:
 
 ```bash
-npx inzo start research     # agents investigate; sandbox read-only, network on
-npx inzo mode plan          # agents negotiate the goal and the task split
+inzo start research     # agents investigate; sandbox read-only, network on
+inzo mode plan          # agents negotiate the goal and the task split
    # (both humans approve)  → AUTO-ADVANCES to build; every watch shows a banner
-npx inzo done               # sync + PR
+inzo done               # sync + PR
 ```
 
 No re-pairing, and no credential changes at any step — modes set local sandbox
@@ -220,8 +232,8 @@ it operates under.
 ### Quota, and what Inzo costs
 
 ```bash
-npx inzo capacity --window 5h --used 62% --resets 15:40
-npx inzo tokens
+inzo capacity --window 5h --used 62% --resets 15:40
+inzo tokens
 ```
 
 Two hours into pairing, one member's rolling window runs dry and the work
@@ -246,7 +258,7 @@ cannot embarrass us is not worth printing.
 ### When something's wrong
 
 ```bash
-npx inzo doctor
+inzo doctor
 ```
 
 Checks Node, git, Docker, and `gh`, whether the relay answers, whether your

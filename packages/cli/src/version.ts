@@ -5,7 +5,7 @@
  * and importing `index.ts` for a constant would run the whole CLI's
  * entrypoint. Kept in step with package.json by the release process.
  */
-export const VERSION = "0.1.0";
+export const VERSION = "0.3.0";
 
 /**
  * The MCP server version pinned into `.mcp.json` (§9 U-3).
@@ -15,4 +15,4 @@ export const VERSION = "0.1.0";
  * the otherwise baffling failure where you update the CLI, everything looks
  * current, and your agent keeps running last month's server forever.
  */
-export const MCP_VERSION = "0.2.0";
+export const MCP_VERSION = "0.3.0";
