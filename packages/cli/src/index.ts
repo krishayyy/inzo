@@ -4,6 +4,9 @@ import { invite, pair } from "./pair.js";
 import { sessionFilePath } from "./session.js";
 import { style } from "./render.js";
 
+/** Kept in step with packages/cli/package.json by the release process. */
+const VERSION = "0.1.0";
+
 const USAGE = `inzo — pair, watch, and control an agent pairing
 
   inzo pair                  create a pairing code and wire up .mcp.json here
@@ -18,13 +21,41 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo budget [--deadline <iso>] [--tokens <n>] [--cost <usd>]
                              set or show the shared budget; pass "none" to clear
 
-Credentials come from ${sessionFilePath()}, written by \`inzo pair\` or by the
-Inzo MCP server when your agent pairs. There is deliberately no --token flag:
-argv is visible to every process on this machine.
+Sessions are keyed by project directory, so several repos can be paired at once.
+This one resolves to:
+  ${sessionFilePath()}
+
+Credentials are written there by \`inzo pair\` or by the Inzo MCP server when your
+agent pairs. There is deliberately no --token flag: argv is visible to every
+process on this machine.
 `;
+
+/**
+ * Windows is not supported yet, and the reason is not cosmetic: `chmod 0600`
+ * is a no-op on NTFS, so the holder private key — which makes consent
+ * non-repudiable and cannot be regenerated — would sit unprotected. Refusing
+ * is safer than half-working. WSL is a complete environment for this.
+ */
+function assertSupportedPlatform(): void {
+  if (process.platform === "win32") {
+    throw new Error(
+      "Inzo does not support Windows yet: file permissions there cannot protect the holder " +
+        "private key that signs your approvals. Run it under WSL instead.",
+    );
+  }
+}
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+
+  if (command !== undefined && !["help", "--help", "-h", "--version", "-v"].includes(command)) {
+    assertSupportedPlatform();
+  }
+
+  if (command === "--version" || command === "-v") {
+    process.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
 
   switch (command) {
     case "pair": {

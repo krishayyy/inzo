@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { legacySessionFilePath, sessionFilePathFor, writeCurrentPointer } from "inzo-holder";
 
 /**
  * State for this stdio MCP server process, mirrored to `~/.inzo/session.json`.
@@ -45,12 +45,27 @@ export interface SessionFile {
   credential?: string | null;
   holderPrivateKey?: string | null;
   principalId?: string | null;
+  /** The directory this session is scoped to. Absent on legacy sessions. */
+  workspace?: string;
   updatedAt: string;
 }
 
-/** `INZO_HOME` exists so tests never touch the real home directory. */
+/**
+ * Where this agent's session lives.
+ *
+ * Keyed by `INZO_WORKSPACE` so two projects on one machine are two sessions.
+ * A single global file meant a second pairing overwrote the first's holder
+ * private key, and meant this server could hold one pairing's credential
+ * while pointed at another pairing's directory.
+ *
+ * With no workspace declared there is nothing to key on, so the pre-0.3
+ * global path is used; `resolveWorkspace()` already refuses the operations
+ * that actually need a directory. `INZO_HOME` keeps tests off the real home.
+ */
 export function sessionFilePath(): string {
-  return join(process.env.INZO_HOME ?? homedir(), ".inzo", "session.json");
+  const workspace = process.env.INZO_WORKSPACE;
+  if (workspace && workspace.trim() !== "") return sessionFilePathFor(workspace);
+  return legacySessionFilePath();
 }
 
 function generateAgentId(): string {
@@ -144,6 +159,7 @@ export function writeSessionFile(relayUrl = process.env.INZO_RELAY_URL ?? "https
     credential: sessionState.credential,
     holderPrivateKey: sessionState.holderPrivateKey,
     principalId: sessionState.principalId,
+    workspace: process.env.INZO_WORKSPACE,
     updatedAt: new Date().toISOString(),
   };
   try {
@@ -151,6 +167,8 @@ export function writeSessionFile(relayUrl = process.env.INZO_RELAY_URL ?? "https
     writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
     // writeFileSync's mode only applies on create; enforce it on rewrite too.
     chmodSync(target, 0o600);
+    // Lets `inzo` attach from outside any workspace.
+    if (process.env.INZO_WORKSPACE) writeCurrentPointer(process.env.INZO_WORKSPACE);
     return true;
   } catch {
     return false;

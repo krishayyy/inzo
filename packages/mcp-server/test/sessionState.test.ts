@@ -76,3 +76,67 @@ describe("session file", () => {
     expect(readSessionFile()).toBeNull();
   });
 });
+
+
+describe("workspace-keyed sessions", () => {
+  const originalWorkspace = process.env.INZO_WORKSPACE;
+
+  afterEach(() => {
+    if (originalWorkspace === undefined) delete process.env.INZO_WORKSPACE;
+    else process.env.INZO_WORKSPACE = originalWorkspace;
+  });
+
+  it("keys the session file by INZO_WORKSPACE", () => {
+    const a = mkdtempSync(join(tmpdir(), "inzo-ws-a-"));
+    const b = mkdtempSync(join(tmpdir(), "inzo-ws-b-"));
+
+    process.env.INZO_WORKSPACE = a;
+    const pathA = sessionFilePath();
+    process.env.INZO_WORKSPACE = b;
+    const pathB = sessionFilePath();
+
+    expect(pathA).not.toBe(pathB);
+  });
+
+  it("does not let a second workspace clobber the first one's holder key", () => {
+    // The confused-deputy half of the same bug: with one global file, this
+    // server could hold pairing A's credential while pointed at project B.
+    const a = mkdtempSync(join(tmpdir(), "inzo-ws-a-"));
+    const b = mkdtempSync(join(tmpdir(), "inzo-ws-b-"));
+
+    process.env.INZO_WORKSPACE = a;
+    setIdentity("agent_a", "token_a", "pair_a", [], {
+      credential: "cred_a",
+      holderPrivateKey: "KEY_A",
+      principalId: "principal_a",
+    });
+
+    process.env.INZO_WORKSPACE = b;
+    setIdentity("agent_b", "token_b", "pair_b", [], {
+      credential: "cred_b",
+      holderPrivateKey: "KEY_B",
+      principalId: "principal_b",
+    });
+
+    process.env.INZO_WORKSPACE = a;
+    expect(readSessionFile()?.holderPrivateKey).toBe("KEY_A");
+    process.env.INZO_WORKSPACE = b;
+    expect(readSessionFile()?.holderPrivateKey).toBe("KEY_B");
+  });
+
+  it("records the workspace it was scoped to", () => {
+    const dir = mkdtempSync(join(tmpdir(), "inzo-ws-"));
+    process.env.INZO_WORKSPACE = dir;
+    setIdentity("agent_x", "token_x", "pair_x", [], {
+      credential: "cred_x",
+      holderPrivateKey: "KEY_X",
+      principalId: null,
+    });
+    expect(readSessionFile()?.workspace).toBe(dir);
+  });
+
+  it("falls back to the global path when no workspace is declared", () => {
+    delete process.env.INZO_WORKSPACE;
+    expect(sessionFilePath()).toMatch(/[.]inzo\/session[.]json$/);
+  });
+});

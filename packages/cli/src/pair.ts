@@ -1,9 +1,9 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { generateHolderKeyPair } from "inzo-holder";
+import { generateHolderKeyPair, sessionFilePathFor, writeCurrentPointer } from "inzo-holder";
 import { createApi } from "./api.js";
 import { style } from "./render.js";
-import { loadSession, requirePairing, sessionFilePath, type SessionFile } from "./session.js";
+import { loadSession, requirePairing, resolveWorkspace, type SessionFile } from "./session.js";
 
 /**
  * Same default as packages/mcp-server/src/relayClient.ts — both sides of a
@@ -52,13 +52,30 @@ async function relayPost<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-function writeSession(fields: Omit<SessionFile, "relayUrl" | "updatedAt">): void {
-  const target = sessionFilePath();
-  const payload: SessionFile = { relayUrl: RELAY_URL, updatedAt: new Date().toISOString(), ...fields };
+/**
+ * Writes the session for THIS workspace.
+ *
+ * Deliberately not `sessionFilePath()`: that resolves a session to *read*, and
+ * falls back to the pointer or the legacy global file. A write must always
+ * land on the current workspace's own key, or pairing a second project would
+ * overwrite the first project's holder private key — the bug workspace keying
+ * exists to fix.
+ */
+function writeSession(fields: Omit<SessionFile, "relayUrl" | "updatedAt">): string {
+  const workspace = resolveWorkspace();
+  const target = sessionFilePathFor(workspace);
+  const payload: SessionFile = {
+    relayUrl: RELAY_URL,
+    workspace,
+    updatedAt: new Date().toISOString(),
+    ...fields,
+  };
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   // writeFileSync's mode only applies on create; enforce it on rewrite too.
   chmodSync(target, 0o600);
+  writeCurrentPointer(workspace);
+  return target;
 }
 
 /**
@@ -95,7 +112,7 @@ export async function pair(code?: string): Promise<void> {
     const joined = await relayPost<JoinPairingResponse>(`/pairings/${encodeURIComponent(code)}/join`, {
       cnf: { jwk: holder.publicJwk },
     });
-    writeSession({
+    const sessionPath = writeSession({
       pairingId: joined.pairingId,
       agentId: joined.agentId,
       agentToken: joined.agentToken,
@@ -105,13 +122,13 @@ export async function pair(code?: string): Promise<void> {
       principalId: joined.principalId,
     });
     process.stdout.write(`${style.green("Joined pairing.")} Peer agent: ${joined.peerAgentId}\n`);
-    process.stdout.write(`Wrote ${sessionFilePath()} and ${mcpConfigPath}.\n`);
+    process.stdout.write(`Wrote ${sessionPath} and ${mcpConfigPath}.\n`);
     process.stdout.write(`Run ${style.bold("inzo watch")} to see the plan negotiate live.\n`);
     return;
   }
 
   const created = await relayPost<CreatePairingResponse>("/pairings", { cnf: { jwk: holder.publicJwk } });
-  writeSession({
+  const sessionPath = writeSession({
     pairingId: null,
     agentId: created.agentId,
     agentToken: created.agentToken,
@@ -122,7 +139,7 @@ export async function pair(code?: string): Promise<void> {
   });
   process.stdout.write(`${style.green("Pairing code:")} ${style.bold(created.code)} (expires ${created.expiresAt})\n`);
   process.stdout.write(`Share it with your teammate — they run: ${style.bold(`inzo pair ${created.code}`)}\n`);
-  process.stdout.write(`Wrote ${sessionFilePath()} and ${mcpConfigPath}.\n`);
+  process.stdout.write(`Wrote ${sessionPath} and ${mcpConfigPath}.\n`);
   process.stdout.write(`Once they've joined, run ${style.bold("inzo watch")} here.\n`);
 }
 
