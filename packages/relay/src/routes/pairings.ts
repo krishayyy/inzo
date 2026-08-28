@@ -119,6 +119,17 @@ export function pairingsRouter(store: RelayStore, limiter = new FailureLimiter()
         peerScope: peerAgentId ? store.getAgentScope(peerAgentId) : null,
         revoked: Boolean(identity.revokedAt),
         peerRevoked: peerAgentId ? store.isAgentRevoked(peerAgentId) : null,
+        // The N-party form of `peerScope`/`peerRevoked`, and the reason a 3+
+        // member pairing can run shared commands at all: without a live
+        // per-member scope and revocation check there is nothing to verify a
+        // specific member's authority against, and the honest response to an
+        // unverifiable check is to refuse. Populated at every size, so the
+        // client never has to branch on member count.
+        memberDetails: pairing.members.map((memberAgentId) => ({
+          agentId: memberAgentId,
+          scope: store.getAgentScope(memberAgentId),
+          revoked: store.isAgentRevoked(memberAgentId),
+        })),
       },
     });
   });

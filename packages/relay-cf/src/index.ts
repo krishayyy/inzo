@@ -402,10 +402,19 @@ async function route(req: Request, env: Env): Promise<Response> {
     // "peer" only makes sense for the original 2-member shape; for 3+
     // members use `members` and look up each one's own scope/revoked state.
     const peerAgentId = pairing.members.length === 2 ? unwrap(await room.otherAgent(pairing, auth.agentId)) : null;
-    const [budget, peerScope, peerRevoked] = await Promise.all([
+    const [budget, peerScope, peerRevoked, memberDetails] = await Promise.all([
       room.getBudget(),
       peerAgentId ? registry.getAgentScope(peerAgentId) : Promise.resolve(null),
       peerAgentId ? registry.isAgentRevoked(peerAgentId) : Promise.resolve(null),
+      // The N-party form of peerScope/peerRevoked — see the Express relay's
+      // note. Populated at every size so the client never branches on count.
+      Promise.all(
+        pairing.members.map(async (memberAgentId) => ({
+          agentId: memberAgentId,
+          scope: await registry.getAgentScope(memberAgentId),
+          revoked: await registry.isAgentRevoked(memberAgentId),
+        })),
+      ),
     ]);
     return json({
       pairing: {
@@ -420,6 +429,7 @@ async function route(req: Request, env: Env): Promise<Response> {
         peerScope,
         revoked: false, // an already-revoked credential never reaches here — authenticate() rejects it first
         peerRevoked,
+        memberDetails,
       },
     });
   }

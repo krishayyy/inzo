@@ -57,9 +57,21 @@ export interface UsageSnapshot {
   runway: Runway;
 }
 
+/** One member's live authority, as the relay reports it. */
+export interface MemberDetail {
+  agentId: string;
+  scope: string[];
+  revoked: boolean;
+}
+
 export interface MinePairing {
   id: string;
   agentId: string;
+  /** Full membership, length >= 2 — the source of truth past two people. */
+  members?: string[];
+  /** Per-member scope and revocation. Absent from a pre-N-party relay. */
+  memberDetails?: MemberDetail[];
+  /** Null for 3+ members: "the other one" stops being well defined. */
   peerAgentId: string;
   budget: { deadline: string | null; tokenBudget: number | null; costBudgetUsd: number | null } | null;
   scope: string[];
@@ -157,7 +169,8 @@ export function createApi(session: SessionFile) {
     usage: (pairingId: string) => call<UsageSnapshot>("GET", `/pairings/${pairingId}/usage`),
     setBudget: (pairingId: string, input: Record<string, unknown>) =>
       call<{ budget: unknown }>("PUT", `/pairings/${pairingId}/budget`, input),
-    revoke: (pairingId: string, target: "peer" | "self") =>
+    /** `peer`, `self`, or a specific member agentId — see `inzo revoke`. */
+    revoke: (pairingId: string, target: string) =>
       call<{ revocation: { revokedAgentId: string; revokedAt: string; by: string } }>(
         "POST",
         `/pairings/${pairingId}/revoke`,

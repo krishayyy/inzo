@@ -350,15 +350,25 @@ export function registerTools(server: McpServer): void {
             } else if (!pairing.members?.includes(origin)) {
               throw new Error(`"${origin}" is not a member of this pairing.`);
             } else {
-              // 3+ member pairings: this relay build does not yet expose a
-              // per-member live scope/revocation check the way it does for
-              // the 2-member "peer" path below, and the check must never be
-              // silently skipped — refuse rather than run unchecked work.
-              throw new Error(
-                `Running a command on behalf of a specific non-peer member ("${origin}") is not yet supported — only 'self' and 'peer' (2-member pairings) can run shared commands today.`,
-              );
+              // A named member in a 3+ party pairing. The same two checks the
+              // "peer" path makes, against that member's own live authority —
+              // which is what `memberDetails` exists to provide. If the relay
+              // cannot answer, refuse: an authority check that is skipped is
+              // worse than one that fails, because the command still runs.
+              const member = pairing.memberDetails?.find((entry) => entry.agentId === origin);
+              if (!member) {
+                throw new Error(
+                  `This relay does not report per-member authority, so ${origin}'s scope and revocation cannot be checked. Refusing to run their command.`,
+                );
+              }
+              if (member.revoked) {
+                throw new Error(`${origin}'s credential has been revoked. Refusing to run their command.`);
+              }
+              if (!member.scope.includes("commands:run")) {
+                throw new Error(`${origin}'s credential does not carry 'commands:run'. Refusing to run their command.`);
+              }
             }
-            if (pairing.peerRevoked) {
+            if (origin === "peer" && pairing.peerRevoked) {
               throw new Error("The peer's credential has been revoked. Refusing to run their command.");
             }
             // PROTOCOL.md §8: an agent may not act on a plan its humans have
@@ -375,7 +385,7 @@ export function registerTools(server: McpServer): void {
               );
             }
 
-            if (!(pairing.peerScope ?? []).includes("commands:run")) {
+            if (origin === "peer" && !(pairing.peerScope ?? []).includes("commands:run")) {
               throw new Error(
                 "The peer's credential does not carry 'commands:run'. Refusing to run a command on their behalf.",
               );
@@ -571,8 +581,11 @@ function registerAdmin(server: McpServer): void {
             return textResult({ scope, message: "Scope narrowed. This cannot be undone for this credential." });
           }
           case "revoke": {
+            // `peer` is a 2-member alias; past two, name the member.
             const target = p.target;
-            if (target !== "peer" && target !== "self") throw new Error("revoke needs target: 'peer' or 'self'");
+            if (typeof target !== "string" || target === "") {
+              throw new Error("revoke needs target: 'peer', 'self', or a member agentId");
+            }
             const { revocation } = await relayClient.revoke(requirePairingId(), await auth(), target);
             return textResult({ revocation, message: `Revoked ${target}. This is permanent.` });
           }

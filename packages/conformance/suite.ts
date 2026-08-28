@@ -70,6 +70,21 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
     };
   }
 
+  /** Grows a pairing to `size` members, returning every member's auth. */
+  async function team(client: RelayClient, size: number, session?: unknown) {
+    const { pairingId, a, b } = await pair(client, session);
+    const members = [a, b];
+    for (let i = 2; i < size; i++) {
+      const invite = await client.post(`/pairings/${pairingId}/invite`, {}, a.auth);
+      const joined = await client.post(`/pairings/${invite.body.code}/join`, {});
+      members.push({
+        auth: { Authorization: `Bearer ${joined.body.agentToken}` },
+        agentId: joined.body.agentId as string,
+      });
+    }
+    return { pairingId, members };
+  }
+
   describe(`${relayName} — protocol conformance`, () => {
     describe("pairing lifecycle", () => {
       it("returns a code, the creator's identity, and full scope", async () => {
@@ -376,6 +391,100 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
       });
     });
 
+
+
+    describe("N-party (P0-3)", () => {
+      it("reports every member's own scope and revocation, at any size", async () => {
+        // The field that makes 3+ member shared commands possible at all:
+        // without a live per-member authority check there is nothing to
+        // verify against, and the honest response to an unverifiable check is
+        // to refuse the work.
+        const client = await makeClient();
+        const { pairingId, members } = await team(client, 5);
+        expect(members).toHaveLength(5);
+
+        const mine = await client.get("/pairings/mine", members[0].auth);
+        expect(mine.body.pairing.members).toHaveLength(5);
+        expect(mine.body.pairing.memberDetails).toHaveLength(5);
+        for (const detail of mine.body.pairing.memberDetails) {
+          expect(members.map((m) => m.agentId)).toContain(detail.agentId);
+          expect(detail.scope).toContain("commands:run");
+          expect(detail.revoked).toBe(false);
+        }
+        expect(pairingId).toBeTruthy();
+      });
+
+      it("stops naming a peer past two members, but still lists them all", async () => {
+        const client = await makeClient();
+        const { members } = await team(client, 3);
+        const mine = await client.get("/pairings/mine", members[0].auth);
+        // "the other one" is not well defined with three people.
+        expect(mine.body.pairing.peerAgentId).toBeNull();
+        expect(mine.body.pairing.members).toHaveLength(3);
+      });
+
+      it("requires every member's approval to lock a plan", async () => {
+        const client = await makeClient();
+        const { pairingId, members } = await team(client, 5);
+
+        const proposed = await client.post(
+          `/pairings/${pairingId}/plan`,
+          { goal: "ship it", items: [{ owner: members[0].agentId, task: "do the thing" }] },
+          members[0].auth,
+        );
+        const version = proposed.body.plan.version;
+
+        for (let i = 0; i < 4; i++) {
+          const res = await client.post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, members[i].auth);
+          expect(res.body.plan.locked, `locked after only ${i + 1} of 5 approvals`).toBe(false);
+        }
+        const last = await client.post(`/pairings/${pairingId}/plan/approve`, { planVersion: version }, members[4].auth);
+        expect(last.body.plan.locked).toBe(true);
+      });
+
+      it("revokes one named member and leaves the rest live", async () => {
+        const client = await makeClient();
+        const { pairingId, members } = await team(client, 4);
+        const victim = members[2];
+
+        const res = await client.post(`/pairings/${pairingId}/revoke`, { target: victim.agentId }, members[0].auth);
+        expect(res.status).toBe(200);
+        expect(res.body.revocation.revokedAgentId).toBe(victim.agentId);
+
+        const mine = await client.get("/pairings/mine", members[0].auth);
+        const byId = new Map(
+          mine.body.pairing.memberDetails.map((d: { agentId: string; revoked: boolean }) => [d.agentId, d.revoked]),
+        );
+        expect(byId.get(victim.agentId)).toBe(true);
+        for (const member of members.filter((m) => m.agentId !== victim.agentId)) {
+          expect(byId.get(member.agentId), `${member.agentId} should still be live`).toBe(false);
+        }
+
+        // And the ejected member is actually cut off, not merely flagged.
+        expect((await client.get("/pairings/mine", victim.auth)).status).toBe(401);
+      });
+
+      it("refuses to revoke a non-member", async () => {
+        const client = await makeClient();
+        const { pairingId, members } = await team(client, 3);
+        const res = await client.post(`/pairings/${pairingId}/revoke`, { target: "agent_notreal" }, members[0].auth);
+        expect(res.status).toBe(400);
+      });
+
+      it("shows presence for every member at once", async () => {
+        const client = await makeClient();
+        const { pairingId, members } = await team(client, 5, { mode: "cowork", repo: null });
+        for (const member of members) {
+          await client.post(
+            `/pairings/${pairingId}/presence`,
+            { presence: { branch: "inzo/7fk2q9", head: "a1b2c3d", dirty: ["shared.ts"], ahead: 0, behind: 0, conflicted: false } },
+            member.auth,
+          );
+        }
+        const seen = await client.get(`/pairings/${pairingId}/presence`, members[0].auth);
+        expect(seen.body.presence).toHaveLength(5);
+      });
+    });
 
   });
 }

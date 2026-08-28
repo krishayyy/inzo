@@ -1,7 +1,16 @@
 import { createInterface } from "node:readline/promises";
 import { signConsent } from "inzo-holder";
 import { createApi, type Api, type Message, type PresenceEntry } from "./api.js";
-import { formatMessage, formatPairing, formatPlan, formatPresence, formatRunway, heading, style } from "./render.js";
+import {
+  formatMessage,
+  formatPairing,
+  formatPlan,
+  formatPresence,
+  formatRunway,
+  heading,
+  shortMember,
+  style,
+} from "./render.js";
 import { loadSession, requirePairing, type SessionFile } from "./session.js";
 import { subscribe } from "./sse.js";
 
@@ -37,7 +46,7 @@ export async function status(ctx = context()): Promise<void> {
 
   ctx.out(formatPairing(pairing));
   ctx.out(heading("Plan"));
-  ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId));
+  ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId, pairing.members));
   ctx.out(heading("Runway"));
   ctx.out(formatRunway(snapshot.runway));
 }
@@ -86,7 +95,7 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
         case "plan.updated": {
           const { plan } = event.data as { plan: Parameters<typeof formatPlan>[0] };
           ctx.out(heading("Plan updated"));
-          ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId));
+          ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId, pairing.members));
           if (plan && !plan.locked && !plan.approvedBy.includes(ctx.agentId)) {
             ctx.out(style.yellow(`\nRun \`inzo approve\` to sign off on v${plan.version}.\n`));
           }
@@ -112,11 +121,19 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
         }
         case "pairing.revoked": {
           const { revocation } = event.data as { revocation: { revokedAgentId: string; by: string } };
-          const who = revocation.revokedAgentId === ctx.agentId ? "YOUR agent" : "the peer's agent";
-          const by = revocation.by === ctx.agentId ? "you" : "the peer";
-          ctx.out(style.red(`\n!! ${who} was revoked by ${by}. The pairing is over.\n`));
-          controller.abort();
-          return;
+          const mine = revocation.revokedAgentId === ctx.agentId;
+          const who = mine ? "YOUR agent" : shortMember(revocation.revokedAgentId);
+          const by = revocation.by === ctx.agentId ? "you" : shortMember(revocation.by);
+          ctx.out(style.red(`\n!! ${who} was revoked by ${by}.\n`));
+          // Past two people, one member leaving is not the end of the session
+          // — the rest are still working, and closing their view would be
+          // wrong. Only stop watching when the ejected agent is this one.
+          if (mine || (pairing.members?.length ?? 2) <= 2) {
+            ctx.out(style.red("The pairing is over.\n"));
+            controller.abort();
+            return;
+          }
+          break;
         }
       }
     }
@@ -145,7 +162,7 @@ export async function approve(ctx = context(), confirm = askYesNo): Promise<void
   }
 
   ctx.out(heading(`Plan v${plan.version} — proposed by ${plan.proposedBy === pairing.agentId ? "your agent" : "the peer"}`));
-  ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId));
+  ctx.out(formatPlan(plan, pairing.agentId, pairing.peerAgentId, pairing.members));
 
   if (!(await confirm(`\nApprove v${plan.version}?`))) {
     ctx.out(style.dim("Not approved. Nothing was recorded."));
@@ -218,13 +235,41 @@ export async function audit(args: string[], ctx = context()): Promise<void> {
   );
 }
 
-/** The kill switch, with a confirmation because it cannot be undone. */
-export async function revoke(
-  target: "peer" | "self",
-  ctx = context(),
-  confirm = askYesNo,
-): Promise<void> {
-  const subject = target === "peer" ? "the peer's agent" : "your own agent";
+/**
+ * The kill switch, with a confirmation because it cannot be undone.
+ *
+ * `peer` stays as a 2-member alias — it is in the published README — but it is
+ * meaningless with five people, so a specific member agentId is accepted and
+ * is the right answer past two. Resolving `peer` against the real membership
+ * here (rather than letting the relay guess) means a 3+ member pairing gets a
+ * message naming its members instead of an opaque 400.
+ */
+export async function revoke(target: string, ctx = context(), confirm = askYesNo): Promise<void> {
+  const { pairing } = await ctx.api.mine();
+  if (!pairing) throw new Error("No active pairing.");
+
+  const members = pairing.members ?? [];
+  let subject: string;
+  if (target === "self") {
+    subject = "your own agent";
+  } else if (target === "peer") {
+    if (members.length > 2) {
+      throw new Error(
+        `"peer" is ambiguous in a ${members.length}-member pairing. Name the member: ` +
+          members.filter((id) => id !== pairing.agentId).map(shortMember).join(", "),
+      );
+    }
+    subject = "the peer's agent";
+  } else if (members.length > 0 && !members.includes(target)) {
+    // Also matched on the short form, since that is what `status` prints.
+    const full = members.find((id) => shortMember(id) === target);
+    if (!full) throw new Error(`"${target}" is not a member of this pairing. Members: ${members.map(shortMember).join(", ")}`);
+    target = full;
+    subject = shortMember(full);
+  } else {
+    subject = shortMember(target);
+  }
+
   ctx.out(style.red(`This immediately and permanently cuts off ${subject}. It cannot be undone.`));
   if (!(await confirm("Revoke?"))) {
     ctx.out(style.dim("Cancelled. Nothing was revoked."));
@@ -232,6 +277,9 @@ export async function revoke(
   }
   const { revocation } = await ctx.api.revoke(ctx.pairingId, target);
   ctx.out(style.red(`Revoked ${subject} at ${revocation.revokedAt}.`));
+  if (members.length > 2) {
+    ctx.out(style.dim(`${members.length - 1} member(s) remain in this pairing.`));
+  }
 }
 
 export async function budget(args: string[], ctx = context()): Promise<void> {

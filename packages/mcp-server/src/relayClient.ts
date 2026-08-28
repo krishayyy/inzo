@@ -188,9 +188,18 @@ export interface Budget {
   updatedAt: string;
 }
 
+/** One member's live authority, as the relay reports it. */
+export interface MemberDetail {
+  agentId: string;
+  scope: Scope[];
+  revoked: boolean;
+}
+
 export interface MinePairing {
   id: string;
   agentId: string;
+  /** Per-member scope and revocation. Absent from a pre-N-party relay. */
+  memberDetails?: MemberDetail[];
   /** Full membership, length >= 2. The source of truth for N-party pairings. */
   members: string[];
   approvalPolicy: string;
@@ -312,7 +321,8 @@ export const relayClient = {
     return request("POST", "/pairings/mine/scope", { scope }, undefined, auth);
   },
 
-  revoke(pairingId: string, auth: Auth | string, target: "self" | "peer"): Promise<{ revocation: Revocation }> {
+  /** `self`, `peer`, or a specific member agentId. */
+  revoke(pairingId: string, auth: Auth | string, target: string): Promise<{ revocation: Revocation }> {
     return request("POST", `/pairings/${encodeURIComponent(pairingId)}/revoke`, { target }, undefined, auth);
   },
 

@@ -27,7 +27,8 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo watch                 live view of the thread, plan, and runway
   inzo status                one-shot snapshot of the pairing
   inzo approve               read the current plan and sign off on it
-  inzo revoke [peer|self]    kill switch (default: peer)
+  inzo revoke [peer|self|<member>]
+                             kill switch (default: peer)
   inzo withdraw              pull your approval back, no peer cooperation needed
   inzo audit [--since <n>]   tamper-evident log, with chain verification
   inzo budget [--deadline <iso>] [--tokens <n>] [--cost <usd>]
@@ -142,14 +143,11 @@ async function main(argv: string[]): Promise<number> {
     case "approve":
       await approve();
       return 0;
-    case "revoke": {
-      const target = rest[0] ?? "peer";
-      if (target !== "peer" && target !== "self") {
-        throw new Error('revoke takes "peer" or "self"');
-      }
-      await revoke(target);
+    case "revoke":
+      // `peer`, `self`, or a member agentId. Validated against the real
+      // membership in revoke() itself, which can name the alternatives.
+      await revoke(rest[0] ?? "peer");
       return 0;
-    }
     case "withdraw":
       await withdraw();
       return 0;

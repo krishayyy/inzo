@@ -35,22 +35,48 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-export function formatPlan(plan: Plan | null, selfAgentId: string, peerAgentId: string): string {
+/**
+ * Renders one approval box per member, however many there are.
+ *
+ * `members` is optional only so a pre-N-party relay still renders something
+ * sensible; when it is absent this falls back to the two agents it was given.
+ * A plan locks on unanimous approval, so showing five people four boxes is
+ * not a cosmetic bug — it hides who everyone is waiting on.
+ */
+export function formatPlan(
+  plan: Plan | null,
+  selfAgentId: string,
+  peerAgentId: string | null,
+  members?: string[],
+): string {
   if (!plan) return style.dim("No plan proposed yet.");
 
-  const approvals = [selfAgentId, peerAgentId].map((agentId) => {
-    const label = agentId === selfAgentId ? "you" : "peer";
+  const everyone = members?.length ? members : [selfAgentId, ...(peerAgentId ? [peerAgentId] : [])];
+  const label = (agentId: string) => (agentId === selfAgentId ? "you" : shortMember(agentId));
+
+  const approvals = everyone.map((agentId) => {
     // Never signal state by color alone — the glyph carries it too.
-    return plan.approvedBy.includes(agentId) ? style.green(`[x] ${label}`) : style.dim(`[ ] ${label}`);
+    return plan.approvedBy.includes(agentId)
+      ? style.green(`[x] ${label(agentId)}`)
+      : style.dim(`[ ] ${label(agentId)}`);
   });
 
-  const status = plan.locked ? style.green("LOCKED") : style.yellow("AWAITING APPROVAL");
+  const waiting = everyone.filter((agentId) => !plan.approvedBy.includes(agentId));
+  const status = plan.locked
+    ? style.green("LOCKED")
+    : style.yellow(`AWAITING ${waiting.length} OF ${everyone.length}`);
+
   const lines = [
     `${style.bold(plan.goal)}  ${style.dim(`(v${plan.version})`)}  ${status}`,
-    ...plan.items.map((item) => `  - ${item.owner === selfAgentId ? "you" : "peer"}: ${item.task}`),
+    ...plan.items.map((item) => `  - ${label(item.owner)}: ${item.task}`),
     `  ${approvals.join("   ")}`,
   ];
   return lines.join("\n");
+}
+
+/** `agent_ab12cd34` -> `ab12cd34`. Readable in a row of five. */
+export function shortMember(agentId: string): string {
+  return agentId.startsWith("agent_") ? agentId.slice(6, 14) : agentId.slice(0, 8);
 }
 
 export function formatRunway(runway: Runway): string {
@@ -68,17 +94,35 @@ export function formatRunway(runway: Runway): string {
   return `${parts.length ? parts.join("  ·  ") + "\n" : ""}${verdict}`;
 }
 
+const NOTABLE_SCOPES = ["commands:run", "plan:approve", "plan:propose", "messages:send"];
+
+/**
+ * One row per member, with what each has given up.
+ *
+ * Driven by `memberDetails` when the relay supplies it, so a five-person
+ * pairing renders five rows rather than "you" and a peer who does not exist.
+ * The `peerScope` path stays for a relay that predates it.
+ */
 export function formatPairing(pairing: MinePairing): string {
-  const lines = [
-    `${style.bold("Pairing")} ${pairing.id}`,
-    `  you   ${shortAgent(pairing.agentId)}  ${pairing.revoked ? style.red("REVOKED") : style.green("active")}`,
-    `  peer  ${shortAgent(pairing.peerAgentId)}  ${pairing.peerRevoked ? style.red("REVOKED") : style.green("active")}`,
-  ];
-  const dropped = ["commands:run", "plan:approve", "plan:propose", "messages:send"].filter(
-    (scope) => !pairing.peerScope.includes(scope),
-  );
-  if (dropped.length > 0) {
-    lines.push(`  ${style.dim(`peer has given up: ${dropped.join(", ")}`)}`);
+  const lines = [`${style.bold("Pairing")} ${pairing.id}`];
+
+  const details =
+    pairing.memberDetails ??
+    (pairing.peerAgentId
+      ? [
+          { agentId: pairing.agentId, scope: pairing.scope, revoked: pairing.revoked },
+          { agentId: pairing.peerAgentId, scope: pairing.peerScope ?? [], revoked: Boolean(pairing.peerRevoked) },
+        ]
+      : [{ agentId: pairing.agentId, scope: pairing.scope, revoked: pairing.revoked }]);
+
+  for (const member of details) {
+    const who = (member.agentId === pairing.agentId ? "you" : shortMember(member.agentId)).padEnd(10);
+    const state = member.revoked ? style.red("REVOKED") : style.green("active");
+    lines.push(`  ${who}${shortAgent(member.agentId)}  ${state}`);
+    const dropped = NOTABLE_SCOPES.filter((scope) => !member.scope.includes(scope));
+    if (dropped.length > 0) {
+      lines.push(`  ${style.dim(`           has given up: ${dropped.join(", ")}`)}`);
+    }
   }
   return lines.join("\n");
 }
