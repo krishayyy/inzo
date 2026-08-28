@@ -56,6 +56,12 @@ export function streamRouter(store: RelayStore): Router {
         case "budget.updated":
           send("budget.updated", { budget: event.budget });
           break;
+        case "session.updated":
+          send("session.updated", { session: event.session });
+          break;
+        case "presence.updated":
+          send("presence.updated", { presence: event.presence });
+          break;
         case "pairing.revoked":
           send("pairing.revoked", { revocation: event.revocation });
           // If this viewer is the one being ejected, the stream is part of

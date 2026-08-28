@@ -1,5 +1,5 @@
 import { buildAuthHeaders } from "inzo-holder";
-import type { SessionDescriptor } from "inzo-protocol";
+import type { Presence, SessionDescriptor } from "inzo-protocol";
 import type { SessionFile } from "./session.js";
 
 export interface ConsentRecord {
@@ -66,6 +66,12 @@ export interface MinePairing {
   peerScope: string[];
   revoked: boolean;
   peerRevoked: boolean;
+}
+
+/** One member's presence, as the relay serves it. */
+export interface PresenceEntry extends Presence {
+  agentId: string;
+  at: string;
 }
 
 export class ApiError extends Error {
@@ -158,6 +164,9 @@ export function createApi(session: SessionFile) {
         { target },
       ),
     session: (pairingId: string) => call<{ session: SessionDescriptor | null }>("GET", `/pairings/${pairingId}/session`),
+    presence: (pairingId: string) => call<{ presence: PresenceEntry[] }>("GET", `/pairings/${pairingId}/presence`),
+    setPresence: (pairingId: string, presence: Presence) =>
+      call<{ presence: PresenceEntry }>("POST", `/pairings/${pairingId}/presence`, { presence }),
     setSession: (pairingId: string, session: SessionDescriptor) =>
       call<{ session: SessionDescriptor }>("POST", `/pairings/${pairingId}/session`, { session }),
     /** Mints a fresh one-shot code inviting a 3rd+ member into this pairing. */

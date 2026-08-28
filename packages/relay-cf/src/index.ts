@@ -8,6 +8,7 @@
  */
 import {
   InvalidSessionDescriptorError,
+  validatePresence,
   validateSessionDescriptor,
   type SessionDescriptor,
 } from "inzo-protocol";
@@ -483,6 +484,24 @@ async function route(req: Request, env: Env): Promise<Response> {
     const rawLimit = Number(url.searchParams.get("limit") ?? 10);
     const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 10;
     return json(unwrap(await room.getDigest(limit)));
+  }
+
+  // Presence needs no scope of its own: every member can already read the
+  // thread and the plan, and a working-tree hint is strictly less than either.
+  if (sub === "presence" && req.method === "GET") {
+    return json({ presence: unwrap(await room.getPresence(auth.agentId)) });
+  }
+
+  if (sub === "presence" && req.method === "POST") {
+    const { presence: posted } = (rawBody ?? {}) as { presence?: unknown };
+    let presence;
+    try {
+      presence = validatePresence(posted);
+    } catch (err) {
+      if (err instanceof InvalidSessionDescriptorError) throw badRequest(err.message);
+      throw err;
+    }
+    return json({ presence: unwrap(await room.setPresence(auth.agentId, presence)) });
   }
 
   if (sub === "session" && req.method === "GET") {

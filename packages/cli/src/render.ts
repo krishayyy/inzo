@@ -1,4 +1,5 @@
-import type { Message, MinePairing, Plan, Runway } from "./api.js";
+import { overlappingPaths } from "inzo-protocol";
+import type { Message, MinePairing, Plan, PresenceEntry, Runway } from "./api.js";
 
 const useColor = process.env.NO_COLOR === undefined && process.stdout.isTTY === true;
 
@@ -84,4 +85,37 @@ export function formatPairing(pairing: MinePairing): string {
 
 export function heading(text: string): string {
   return `\n${style.bold(text)}\n${style.dim("-".repeat(text.length))}`;
+}
+
+/** `agent_ab12cd34` -> `ab12cd34`, so a row of names stays readable. */
+function memberLabel(agentId: string, selfAgentId: string): string {
+  const short = agentId.startsWith("agent_") ? agentId.slice(6, 14) : agentId.slice(0, 8);
+  return agentId === selfAgentId ? `${short} (you)` : short;
+}
+
+/**
+ * The presence panel.
+ *
+ * The last line — files more than one person has uncommitted — is the highest
+ * value-per-line in the whole tool. It is exactly what two people on one repo
+ * need to know and cannot get from git, which only ever sees one working tree.
+ */
+export function formatPresence(entries: PresenceEntry[], selfAgentId: string): string {
+  if (entries.length === 0) return style.dim("No presence yet — teammates appear here as they sync.");
+
+  const lines = entries.map((entry) => {
+    const who = memberLabel(entry.agentId, selfAgentId).padEnd(16);
+    const counts = `${entry.ahead > 0 ? `^${entry.ahead}` : "  "} ${entry.behind > 0 ? `v${entry.behind}` : "  "}`;
+    const files = entry.dirty.length === 0 ? style.dim("clean") : entry.dirty.slice(0, 3).join(", ");
+    const more = entry.dirty.length > 3 ? style.dim(` +${entry.dirty.length - 3}`) : "";
+    // Never signal by color alone — the word carries it too.
+    const flag = entry.conflicted ? style.red("  CONFLICTED") : "";
+    return `  ${who}${entry.branch.padEnd(16)}${counts}  ${files}${more}${flag}`;
+  });
+
+  const overlap = overlappingPaths(entries);
+  if (overlap.length > 0) {
+    lines.push(style.yellow(`  ! both dirty: ${overlap.join(", ")}`));
+  }
+  return lines.join("\n");
 }

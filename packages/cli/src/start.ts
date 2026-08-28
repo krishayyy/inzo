@@ -10,6 +10,7 @@ import {
   type SessionMode,
 } from "inzo-protocol";
 import { generateHolderKeyPair } from "inzo-holder";
+import { createApi } from "./api.js";
 import {
   checkoutBranch,
   clone,
@@ -28,7 +29,8 @@ import {
   type JoinPairingResponse,
 } from "./pair.js";
 import { style } from "./render.js";
-import { resolveWorkspace } from "./session.js";
+import { loadSession, resolveWorkspace } from "./session.js";
+import { postPresence } from "./sync.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -430,6 +432,8 @@ export async function join(argv: string[]): Promise<void> {
     return;
   }
 
+  if (descriptor.repo) await announce(workspace, descriptor.repo.branch);
+
   process.stdout.write(`${style.green("Joined pairing.")} Peer agent: ${joined.peerAgentId}\n`);
   process.stdout.write(`  mode      ${descriptor.mode}\n`);
   process.stdout.write(`  workspace ${workspace}\n`);
@@ -486,4 +490,23 @@ async function bootstrapJoin(descriptor: SessionDescriptor, parent: string, code
   await clone(repo.url, name, parent);
   await checkoutBranch(dir, repo.branch);
   return dir;
+}
+
+
+/**
+ * Publishes this member's first presence, best-effort.
+ *
+ * Change-triggered, like every other presence write (§10 H-1): joining is a
+ * change. Doing it here means the starter's `watch` panel gains a row the
+ * moment someone arrives, rather than staying empty until that person happens
+ * to run `inzo sync`.
+ */
+async function announce(workspace: string, branch: string): Promise<void> {
+  try {
+    const session = loadSession();
+    if (!session.pairingId) return;
+    await postPresence(createApi(session), session.pairingId, workspace, branch, false);
+  } catch {
+    // A liveness hint is never worth failing a join over.
+  }
 }

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { signConsent } from "inzo-holder";
-import { createApi, type Api, type Message } from "./api.js";
-import { formatMessage, formatPairing, formatPlan, formatRunway, heading, style } from "./render.js";
+import { createApi, type Api, type Message, type PresenceEntry } from "./api.js";
+import { formatMessage, formatPairing, formatPlan, formatPresence, formatRunway, heading, style } from "./render.js";
 import { loadSession, requirePairing, type SessionFile } from "./session.js";
 import { subscribe } from "./sse.js";
 
@@ -58,6 +58,21 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
   // just whatever happens to arrive after they connected.
   const history = await ctx.api.messages(ctx.pairingId);
   ctx.out(formatPairing(pairing));
+
+  // A snapshot before the stream opens, so a late viewer sees who is where
+  // rather than an empty panel until someone next syncs.
+  const presence = new Map<string, PresenceEntry>();
+  try {
+    for (const entry of (await ctx.api.presence(ctx.pairingId)).presence) presence.set(entry.agentId, entry);
+  } catch {
+    // Presence is a hint. An older relay that has never heard of it must not
+    // stop `watch` from showing the thread, the plan, and the runway.
+  }
+  if (presence.size > 0) {
+    ctx.out(heading("Presence"));
+    ctx.out(formatPresence([...presence.values()], ctx.agentId));
+  }
+
   ctx.out(heading("Thread"));
   for (const message of history.messages) ctx.out(formatMessage(message, ctx.agentId));
   ctx.out(style.dim("\nwatching live — ctrl-c to stop\n"));
@@ -83,6 +98,18 @@ export async function watch(ctx = context(), signal?: AbortSignal): Promise<void
         case "budget.updated":
           ctx.out(style.dim("Budget updated."));
           break;
+        case "session.updated": {
+          const { session } = event.data as { session: { mode: string } };
+          ctx.out(style.cyan(`\nMode is now ${style.bold(session.mode)}.\n`));
+          break;
+        }
+        case "presence.updated": {
+          const { presence: entry } = event.data as { presence: PresenceEntry };
+          presence.set(entry.agentId, entry);
+          ctx.out(heading("Presence"));
+          ctx.out(formatPresence([...presence.values()], ctx.agentId));
+          break;
+        }
         case "pairing.revoked": {
           const { revocation } = event.data as { revocation: { revokedAgentId: string; by: string } };
           const who = revocation.revokedAgentId === ctx.agentId ? "YOUR agent" : "the peer's agent";

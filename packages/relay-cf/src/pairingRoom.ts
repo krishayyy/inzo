@@ -19,6 +19,8 @@ import {
   modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
+  PRESENCE_TTL_MS,
+  type Presence,
   type SessionDescriptor,
 } from "inzo-protocol";
 import { DurableObject } from "cloudflare:workers";
@@ -49,7 +51,7 @@ import {
   type CredentialPayload,
 } from "./lib.js";
 import { rpcSafe, type RpcResult } from "./rpcError.js";
-import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, UsageReport, UsageSnapshot } from "./types.js";
+import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, PresenceEntry, UsageReport, UsageSnapshot } from "./types.js";
 
 /** Bounds join-spam via repeated per-invite codes on one pairing. Mirrors packages/relay's store.ts. */
 const MAX_MEMBERS = 8;
@@ -376,6 +378,46 @@ export class PairingRoom extends DurableObject<Env> {
 
   getPairing(): RpcResult<Pairing> {
     return rpcSafe(() => this.getPairingOrThrow());
+  }
+
+  // ---------------------------------------------------------------------
+  // Presence — instance memory only, deliberately
+  // ---------------------------------------------------------------------
+
+  /**
+   * Never written to `ctx.storage`.
+   *
+   * Durable Object storage writes are billed and add latency, and a hint that
+   * expires in 90 seconds deserves neither. It also stays out of the audit
+   * chain: a heartbeat in a tamper-evident record devalues the record.
+   *
+   * The consequence — presence is lost if this DO is evicted — is correct.
+   * Every member re-posts on their next change, and the room is already
+   * resident whenever anyone is actually watching.
+   */
+  private readonly presence = new Map<string, PresenceEntry>();
+
+  setPresence(agentId: string, presence: Presence): RpcResult<PresenceEntry> {
+    return rpcSafe(() => {
+      this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
+      const entry: PresenceEntry = { ...presence, agentId, at: new Date().toISOString() };
+      // Last write wins per member: this is a snapshot of now, not a log.
+      this.presence.set(agentId, entry);
+      this.broadcast("presence.updated", { presence: entry });
+      return entry;
+    });
+  }
+
+  /** Live entries only. Expiry is applied on read, so no alarm is needed. */
+  getPresence(agentId: string): RpcResult<PresenceEntry[]> {
+    return rpcSafe(() => {
+      this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
+      const cutoff = Date.now() - PRESENCE_TTL_MS;
+      for (const [member, entry] of this.presence) {
+        if (Date.parse(entry.at) < cutoff) this.presence.delete(member);
+      }
+      return [...this.presence.values()];
+    });
   }
 
   getSession(): RpcResult<SessionDescriptor | null> {

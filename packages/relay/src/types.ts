@@ -178,3 +178,16 @@ export interface UsageSnapshot {
   usage: CombinedUsage;
   runway: Runway;
 }
+
+/** One member's presence, as served. Never persisted — see RelayStore. */
+export interface PresenceEntry {
+  agentId: string;
+  branch: string;
+  head: string;
+  dirty: string[];
+  ahead: number;
+  behind: number;
+  conflicted: boolean;
+  /** When this snapshot was posted; drives the 90-second TTL. */
+  at: string;
+}

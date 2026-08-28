@@ -13,11 +13,14 @@ import {
   modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
+  PRESENCE_TTL_MS,
+  type Presence,
   type SessionDescriptor,
 } from "inzo-protocol";
 import type { Assurance } from "./audit.js";
 import {
   ALL_SCOPES,
+  type PresenceEntry,
   type Budget,
   type CombinedUsage,
   type Message,
@@ -696,6 +699,45 @@ export class RelayStore {
       .prepare(`UPDATE pairings SET session = ? WHERE id = ?`)
       .run(serializeSessionDescriptor(session), pairingId);
     return session;
+  }
+
+  // ---------------------------------------------------------------------
+  // Presence — in memory only, deliberately
+  // ---------------------------------------------------------------------
+
+  /**
+   * Never touches `this.db`.
+   *
+   * A liveness hint that expires in 90 seconds does not belong in a durable
+   * store, and it must stay out of the hash-chained audit log: putting a
+   * heartbeat in a tamper-evident record devalues the record. Losing all of
+   * it on restart is correct behavior, not a gap — every member re-posts on
+   * their next change.
+   */
+  private readonly presence = new Map<string, Map<string, PresenceEntry>>();
+
+  setPresence(pairingId: string, agentId: string, presence: Presence): PresenceEntry {
+    const entry: PresenceEntry = { ...presence, agentId, at: new Date().toISOString() };
+    let room = this.presence.get(pairingId);
+    if (!room) {
+      room = new Map();
+      this.presence.set(pairingId, room);
+    }
+    // Last write wins per member: this is a snapshot of now, not a log.
+    room.set(agentId, entry);
+    return entry;
+  }
+
+  /** Live entries only. Expiry is applied on read, so no timer is needed. */
+  getPresence(pairingId: string): PresenceEntry[] {
+    const room = this.presence.get(pairingId);
+    if (!room) return [];
+    const cutoff = Date.now() - PRESENCE_TTL_MS;
+    for (const [agentId, entry] of room) {
+      if (Date.parse(entry.at) < cutoff) room.delete(agentId);
+    }
+    if (room.size === 0) this.presence.delete(pairingId);
+    return [...room.values()];
   }
 
   /** Full membership of a pairing, in join order. */

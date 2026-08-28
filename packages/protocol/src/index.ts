@@ -258,3 +258,106 @@ export const MODE_POLICY: Record<SessionMode, ModePolicy> = {
 export function modeOnPlanLock(current: SessionMode): SessionMode | null {
   return current === "research" || current === "plan" ? "build" : null;
 }
+
+// ---------------------------------------------------------------------------
+// Presence
+// ---------------------------------------------------------------------------
+
+/**
+ * A liveness hint: what one member's working tree looks like right now.
+ *
+ * Ephemeral by design, and the design is deliberate on three counts:
+ *
+ *   - It is never persisted. A `Map` in the Express process, DO instance
+ *     memory in `PairingRoom`. Durable Object storage writes are billed and
+ *     add latency, and 90 seconds of liveness does not deserve either.
+ *   - It never enters the hash-chained audit log. Putting a heartbeat in a
+ *     tamper-evident record devalues the record.
+ *   - It is change-triggered, not periodic. A 30-second beat retrofitted
+ *     later would mean launching on the expensive version (§10).
+ *
+ * Nothing is enforced against it — it exists so two people editing one repo
+ * can see the overlap git cannot show them.
+ */
+export interface Presence {
+  branch: string;
+  /** Short commit sha of the member's HEAD. */
+  head: string;
+  /** Paths dirty in their working tree, relative to the repo root. */
+  dirty: string[];
+  ahead: number;
+  behind: number;
+  /** True while a rebase is stopped on a conflict — see `inzo sync`. */
+  conflicted: boolean;
+}
+
+/** How long a presence entry stays live without a refresh. */
+export const PRESENCE_TTL_MS = 90_000;
+
+export const MAX_DIRTY_PATHS = 100;
+export const MAX_PATH_LENGTH = 400;
+
+/**
+ * Validates a presence payload.
+ *
+ * The caps matter more than they look: presence is unauthenticated in the
+ * sense that any member can post any content, it fans out to every other
+ * member's terminal, and it is held in memory. An uncapped `dirty` array is
+ * both a memory cost and a way to flood a teammate's screen.
+ */
+export function validatePresence(input: unknown): Presence {
+  if (!isPlainObject(input)) fail("presence must be an object");
+
+  const branch = validateBranch(input.branch);
+
+  if (typeof input.head !== "string" || !/^[0-9a-f]{4,40}$/.test(input.head)) {
+    fail("presence.head must be a hex commit sha");
+  }
+
+  if (!Array.isArray(input.dirty)) fail("presence.dirty must be an array");
+  if (input.dirty.length > MAX_DIRTY_PATHS) {
+    fail(`presence.dirty must hold at most ${MAX_DIRTY_PATHS} paths`);
+  }
+  const dirty = input.dirty.map((path) => {
+    if (typeof path !== "string" || path.length === 0) fail("presence.dirty entries must be non-empty strings");
+    if (path.length > MAX_PATH_LENGTH) fail(`presence.dirty entries must be at most ${MAX_PATH_LENGTH} characters`);
+    if (CONTROL_CHARS.test(path)) fail("presence.dirty entries must not contain control characters");
+    return path;
+  });
+
+  return {
+    branch,
+    head: input.head,
+    dirty,
+    ahead: count(input.ahead, "presence.ahead"),
+    behind: count(input.behind, "presence.behind"),
+    conflicted: input.conflicted === true,
+  };
+}
+
+function count(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    fail(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+/**
+ * Files more than one member has uncommitted right now.
+ *
+ * A set intersection over the dirty lists, and the highest-value line in the
+ * watch panel: it is exactly what two people on one repo need to know and
+ * cannot get from git, which sees only one working tree.
+ */
+export function overlappingPaths(entries: Array<{ dirty: string[] }>): string[] {
+  const seen = new Map<string, number>();
+  for (const entry of entries) {
+    for (const path of new Set(entry.dirty)) {
+      seen.set(path, (seen.get(path) ?? 0) + 1);
+    }
+  }
+  return [...seen.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([path]) => path)
+    .sort();
+}

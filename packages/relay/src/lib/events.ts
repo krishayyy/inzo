@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { SessionDescriptor } from "inzo-protocol";
-import type { Budget, Message, Plan, UsageReport } from "../types.js";
+import type { Budget, Message, Plan, PresenceEntry, UsageReport } from "../types.js";
 
 /**
  * Central event bus for the relay.
@@ -22,7 +22,8 @@ export type RelayEvent =
   | { type: "usage.reported"; pairingId: string; usage: UsageReport }
   | { type: "budget.updated"; pairingId: string; budget: Budget }
   | { type: "pairing.revoked"; pairingId: string; revocation: Revocation }
-  | { type: "session.updated"; pairingId: string; session: SessionDescriptor };
+  | { type: "session.updated"; pairingId: string; session: SessionDescriptor }
+  | { type: "presence.updated"; pairingId: string; presence: PresenceEntry };
 
 class RelayEventBus extends EventEmitter {
   publish(event: RelayEvent): void {

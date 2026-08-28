@@ -287,5 +287,95 @@ export function describeRelayConformance(relayName: string, makeClient: MakeClie
         expect(third.body.members).toContain(third.body.agentId);
       });
     });
+
+    describe("presence", () => {
+      const VALID = { branch: "inzo/7fk2q9", head: "a1b2c3d", dirty: ["src/api.ts"], ahead: 2, behind: 0, conflicted: false };
+
+      it("starts empty and returns what a member posts", async () => {
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+
+        expect((await client.get(`/pairings/${pairingId}/presence`, a.auth)).body.presence).toEqual([]);
+
+        const posted = await client.post(`/pairings/${pairingId}/presence`, { presence: VALID }, a.auth);
+        expect(posted.status).toBe(200);
+        expect(posted.body.presence).toMatchObject({ ...VALID, agentId: a.agentId });
+        expect(typeof posted.body.presence.at).toBe("string");
+      });
+
+      it("shows every member to every other member", async () => {
+        const client = await makeClient();
+        const { pairingId, a, b } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/presence`, { presence: VALID }, a.auth);
+        await client.post(
+          `/pairings/${pairingId}/presence`,
+          { presence: { ...VALID, dirty: ["web/App.tsx"], ahead: 0, behind: 2 } },
+          b.auth,
+        );
+
+        const seen = await client.get(`/pairings/${pairingId}/presence`, b.auth);
+        expect(seen.body.presence).toHaveLength(2);
+        expect(seen.body.presence.map((entry: { agentId: string }) => entry.agentId).sort()).toEqual(
+          [a.agentId, b.agentId].sort(),
+        );
+      });
+
+      it("is last-write-wins per member, not a log", async () => {
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/presence`, { presence: VALID }, a.auth);
+        await client.post(`/pairings/${pairingId}/presence`, { presence: { ...VALID, dirty: ["b.ts"], ahead: 9 } }, a.auth);
+
+        const seen = await client.get(`/pairings/${pairingId}/presence`, a.auth);
+        expect(seen.body.presence).toHaveLength(1);
+        expect(seen.body.presence[0]).toMatchObject({ dirty: ["b.ts"], ahead: 9 });
+      });
+
+      it("never reaches the audit log", async () => {
+        // A heartbeat inside a tamper-evident record devalues the record.
+        const client = await makeClient();
+        const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+        await client.post(`/pairings/${pairingId}/presence`, { presence: VALID }, a.auth);
+
+        const audit = await client.get(`/pairings/${pairingId}/audit`, a.auth);
+        const actions = (audit.body.records ?? []).map((record: { action: string }) => record.action);
+        expect(actions.filter((action: string) => action.includes("presence"))).toEqual([]);
+      });
+
+      it("requires authentication", async () => {
+        const client = await makeClient();
+        const { pairingId } = await pair(client, { mode: "cowork", repo: null });
+        expect((await client.get(`/pairings/${pairingId}/presence`)).status).toBe(401);
+        expect((await client.post(`/pairings/${pairingId}/presence`, { presence: VALID })).status).toBe(401);
+      });
+
+      describe("rejects malformed presence identically", () => {
+        // The caps are not cosmetic: presence fans out to every member's
+        // terminal and is held in memory, so an uncapped dirty list is both a
+        // memory cost and a way to flood a teammate's screen.
+        const BAD: Array<[string, unknown]> = [
+          ["a missing branch", { ...VALID, branch: undefined }],
+          ["a branch with a traversal", { ...VALID, branch: "inzo/../../etc" }],
+          ["a non-hex head", { ...VALID, head: "not-a-sha" }],
+          ["a non-array dirty list", { ...VALID, dirty: "src/api.ts" }],
+          ["a dirty list over the cap", { ...VALID, dirty: Array.from({ length: 101 }, (_, i) => `f${i}.ts`) }],
+          ["a dirty path with a control character", { ...VALID, dirty: ["src/\u0000.ts"] }],
+          ["a negative ahead", { ...VALID, ahead: -1 }],
+          ["a fractional behind", { ...VALID, behind: 1.5 }],
+          ["a non-object payload", "dirty"],
+        ];
+
+        for (const [why, presence] of BAD) {
+          it(`rejects ${why}`, async () => {
+            const client = await makeClient();
+            const { pairingId, a } = await pair(client, { mode: "cowork", repo: null });
+            const res = await client.post(`/pairings/${pairingId}/presence`, { presence }, a.auth);
+            expect(res.status).toBe(400);
+          });
+        }
+      });
+    });
+
+
   });
 }
