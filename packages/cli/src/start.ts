@@ -30,7 +30,7 @@ import {
   type JoinPairingResponse,
 } from "./pair.js";
 import { style } from "./render.js";
-import { assertClientSupported, rewriteMcpPin } from "./update.js";
+import { assertClientSupported, rewriteMcpPin, updateBeforeSession } from "./update.js";
 import { MCP_VERSION, VERSION } from "./version.js";
 import { loadSession, resolveWorkspace } from "./session.js";
 import { postPresence } from "./sync.js";
@@ -239,6 +239,10 @@ export async function start(argv: string[]): Promise<void> {
   const flags = parseStartFlags(argv);
   const arg = classifyStartArg(flags.positional);
 
+  // A session boundary: nothing is in flight, so this is one of the two
+  // places it is safe to replace the binary underneath the user.
+  if (!flags.json && (await updateBeforeSession(VERSION))) return;
+
   if (flags.printConfig) {
     const workspace = flags.dir ? resolve(flags.dir) : resolveWorkspace();
     process.stdout.write(mcpConfigBlock(workspace, flags.format));
@@ -403,6 +407,8 @@ export function parseJoinFlags(argv: string[]): JoinFlags {
 export async function join(argv: string[]): Promise<void> {
   const flags = parseJoinFlags(argv);
   if (!flags.code) usage("inzo join <code> needs a pairing code");
+
+  if (!flags.json && (await updateBeforeSession(VERSION))) return;
 
   const holder = generateHolderKeyPair();
   const joined = await relayPost<JoinPairingResponse>(`/pairings/${encodeURIComponent(flags.code)}/join`, {

@@ -1,7 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
+import { promisify } from "node:util";
 import { style } from "./render.js";
+
+const run = promisify(execFile);
 
 /**
  * Update checking (§9 U-1) and the version pin in `.mcp.json` (U-3).
@@ -161,4 +165,116 @@ export function assertClientSupported(minimum: string | null | undefined, curren
       `This session needs inzo ${minimum} or newer — you have ${current}. Run \`npm i -g ${PACKAGE_NAME}\`.`,
     );
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Installing an update (§9 U-2)
+// ---------------------------------------------------------------------------
+
+/**
+ * How this copy of the CLI got here, which decides whether updating it is
+ * even meaningful.
+ *
+ *   - `global`  — `npm i -g inzo-cli`. The only kind worth updating in place.
+ *   - `npx`     — a throwaway cache directory. `npx inzo-cli@latest` already
+ *                 fetches the newest version, and writing into npm's cache
+ *                 would be both pointless and rude.
+ *   - `source`  — a git checkout. Running `npm i -g` here would install a
+ *                 *different* copy than the one being run, which is worse
+ *                 than doing nothing: the developer's next command would
+ *                 still be their build, and they would have no idea why.
+ */
+export type InstallKind = "global" | "npx" | "source";
+
+export async function installKind(entry = process.argv[1]): Promise<InstallKind> {
+  if (!entry) return "source";
+
+  // Checked on the invocation path before resolving it: npm caches npx
+  // packages under a `_npx` directory on every platform, and a symlink
+  // elsewhere in the path should not hide that.
+  const resolved = (() => {
+    try {
+      return realpathSync(entry);
+    } catch {
+      return entry;
+    }
+  })();
+  if (entry.includes(`${sep}_npx${sep}`) || resolved.includes(`${sep}_npx${sep}`)) return "npx";
+
+  const globalRoot = await run("npm", ["root", "-g"], { timeout: 15_000 })
+    .then(({ stdout }) => {
+      try {
+        return realpathSync(stdout.trim());
+      } catch {
+        return stdout.trim();
+      }
+    })
+    .catch(() => null);
+  if (globalRoot && resolved.startsWith(globalRoot + sep)) return "global";
+  return "source";
+}
+
+/**
+ * Installs the newest published version.
+ *
+ * Returns the version installed, or null if there was nothing to do. Never
+ * throws: a failed self-update is an inconvenience, and it must not take down
+ * the command the user actually asked for.
+ */
+export async function installUpdate(current: string): Promise<string | null> {
+  const cache = readCache();
+  if (!cache || !isNewer(cache.latest, current)) return null;
+  if ((await installKind()) !== "global") return null;
+  try {
+    // 5 minutes: a cold npm install over a slow link is not a hang.
+    await run("npm", ["install", "-g", `${PACKAGE_NAME}@${cache.latest}`], { timeout: 300_000 });
+    return cache.latest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Updates at a session boundary, and only there (§9 U-2: never mid-session).
+ *
+ * `start` and `join` are the two points where no work is in flight, so they
+ * are the only safe places to swap the binary underneath the user. Returns
+ * true when an update landed, which means the caller must stop: the process
+ * still running is the *old* code, and letting it go on to create a session
+ * would produce one from the version we just replaced — and then a second one
+ * when the user re-ran.
+ */
+export async function updateBeforeSession(current: string): Promise<boolean> {
+  if (updateCheckDisabled()) return false;
+
+  const installed = await installUpdate(current);
+  if (!installed) return false;
+
+  process.stdout.write(
+    `${style.green(`Updated inzo ${current} -> ${installed}.`)}\n` +
+      `Run your command again to use it.\n`,
+  );
+  return true;
+}
+
+/**
+ * The update line for `inzo doctor`, which names the command that fixes it.
+ *
+ * A source checkout is told to pull rather than to npm-install, because
+ * installing would leave the checkout it is being run from untouched.
+ */
+export async function updateStatus(current: string): Promise<{ ok: boolean; detail: string }> {
+  const cache = readCache();
+  if (!cache) return { ok: true, detail: `${current} (no check yet — run any command on a terminal first)` };
+  if (!isNewer(cache.latest, current)) return { ok: true, detail: `${current} (latest)` };
+
+  const kind = await installKind();
+  const fix =
+    kind === "global"
+      ? "run `inzo update`"
+      : kind === "npx"
+        ? `use \`npx ${PACKAGE_NAME}@latest\``
+        : "git pull && npm run build";
+  return { ok: false, detail: `${current}, but ${cache.latest} is out — ${fix}` };
 }

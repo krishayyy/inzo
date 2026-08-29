@@ -255,6 +255,29 @@ Overhead is measured exactly, savings are modelled, and `tokens` says which is
 which. It reports negative when nobody uses the ledger, because a number that
 cannot embarrass us is not worth printing.
 
+### Staying current
+
+```bash
+inzo update      # install the newest version and repin .mcp.json
+```
+
+You will rarely need it. Inzo checks the registry at most once a day, caches
+the answer, and shows a one-line footer when something newer exists. If you
+installed globally, `inzo start` and `inzo join` update you automatically and
+then ask you to re-run — those two commands are the only safe moment, because
+no work is in flight at a session boundary and swapping the binary mid-session
+would be worse than being a version behind.
+
+Updating also repins `inzo-mcp` in `.mcp.json`, so **restart your agent** to
+pick up the new server, and relaunch any running `inzo watch`.
+
+The automatic path only applies to a global install. An `npx` copy is a
+throwaway cache (`npx inzo-cli@latest` always fetches the newest anyway), and a
+source checkout is left alone — installing there would replace a *different*
+copy than the one you are running, and your next command would still be your
+own build with no clue why. `inzo doctor` says which case you are in.
+`INZO_NO_UPDATE_CHECK=1` turns all of it off, and nothing runs off a TTY.
+
 ### When something's wrong
 
 ```bash

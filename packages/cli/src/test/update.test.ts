@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MIN_CLIENT_VERSION } from "inzo-protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertClientSupported, isCacheStale, isNewer, rewriteMcpPin, updateCheckDisabled } from "../update.js";
+import {
+  assertClientSupported,
+  installKind,
+  isCacheStale,
+  isNewer,
+  rewriteMcpPin,
+  updateCheckDisabled,
+  updateStatus,
+} from "../update.js";
 
 let dir: string;
 
@@ -119,5 +127,32 @@ describe("client version negotiation (U-3)", () => {
 
   it("lets this build into a session on the shipped minimum", () => {
     expect(() => assertClientSupported(MIN_CLIENT_VERSION, "0.1.0")).not.toThrow();
+  });
+});
+
+describe("install kind (U-2)", () => {
+  it("recognizes an npx cache directory", async () => {
+    // npx caches under `_npx` on every platform, and updating a throwaway
+    // cache is pointless: `npx inzo-cli@latest` already fetches the newest.
+    expect(await installKind("/Users/x/.npm/_npx/abc123/node_modules/inzo-cli/dist/index.js")).toBe("npx");
+  });
+
+  it("treats a git checkout as source, so it never installs over itself", async () => {
+    // The dangerous case: `npm i -g` from a checkout installs a *different*
+    // copy than the one running, and the developer's next command is still
+    // their own build — with no clue why nothing changed.
+    writeFileSync(join(dir, "index.js"), "");
+    expect(await installKind(join(dir, "index.js"))).toBe("source");
+  });
+
+  it("treats a missing or unreadable entry point as source", async () => {
+    expect(await installKind(undefined)).toBe("source");
+    expect(await installKind(join(dir, "does-not-exist.js"))).toBe("source");
+  });
+});
+
+describe("update status line", () => {
+  it("reports ok when nothing newer is known", async () => {
+    expect((await updateStatus("9.9.9")).ok).toBe(true);
   });
 });

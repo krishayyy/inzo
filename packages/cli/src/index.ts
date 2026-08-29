@@ -3,6 +3,7 @@ import { approve, audit, budget, revoke, status, watch, withdraw } from "./comma
 import { invite, pair } from "./pair.js";
 import { capacity } from "./capacity.js";
 import { refreshUpdateCache, updateNotice } from "./update.js";
+import { update } from "./updateCommand.js";
 import { doctor } from "./doctor.js";
 import { done } from "./done.js";
 import { mode } from "./mode.js";
@@ -23,6 +24,7 @@ const USAGE = `inzo — pair, watch, and control an agent pairing
   inzo sync                  pull --rebase --autostash, then push. Never --force.
   inzo done                  sync, then open a PR from the session branch
   inzo doctor                check git, Docker, gh, the relay, and this session
+  inzo update                install the newest version and repin .mcp.json
   inzo tokens                what Inzo costs in tokens, against what it saves
   inzo capacity [--window 5h --used 62% --resets 15:40]
                              declare how much of your AI quota is left
@@ -70,6 +72,7 @@ const COMMANDS = [
   "sync",
   "done",
   "doctor",
+  "update",
   "tokens",
   "capacity",
   "pair",
@@ -140,6 +143,8 @@ async function dispatch(command: string | undefined, rest: string[]): Promise<nu
       return 0;
     case "doctor":
       return await doctor(rest);
+    case "update":
+      return await update(rest);
     case "tokens":
       await tokens(rest);
       return 0;

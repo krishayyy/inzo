@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { readCapacity } from "./capacity.js";
+import { updateStatus } from "./update.js";
 import { MCP_VERSION, VERSION } from "./version.js";
 import { RELAY_URL } from "./pair.js";
 import { style } from "./render.js";
@@ -68,7 +69,10 @@ export async function runChecks(): Promise<Check[]> {
   const checks: Check[] = [];
   const workspace = resolveWorkspace();
 
-  checks.push({ name: "inzo", ok: true, required: false, detail: `${VERSION} (mcp server pinned at ${MCP_VERSION})` });
+  // Not required: being a version behind degrades nothing on its own, and
+  // failing doctor over it would cry wolf.
+  const update = await updateStatus(VERSION);
+  checks.push({ name: "inzo", ok: update.ok, required: false, detail: `${update.detail} · mcp pin ${MCP_VERSION}` });
 
   const node = parseSemver(process.version);
   checks.push({
