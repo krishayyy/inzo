@@ -122,21 +122,12 @@
     </section>
   </section>
 
-  <!-- The claim here is model agnosticism, which is true by construction: Inzo
-       authenticates and relays at the protocol layer and never sees the model.
-       That is what lets clients (Claude Code, Codex, Cursor) and model
-       runtimes (Qwen, Ollama) sit in one row honestly — the common denominator
-       is MCP, not any particular model.
-
-       Each item ships as a wordmark and upgrades itself to a real logo once
+  <!-- Each item ships as a wordmark and upgrades itself to a real logo once
        brand/logos/<data-logo>.svg exists — see brand/logos/README.md. One row
        is authored here; app.js clones it to fill the track, so with JS off
        this stays a plain static row. -->
   <section class="logos reveal">
-    <p class="logos-label">
-      <strong>Model agnostic.</strong> Inzo pairs any two agents that speak MCP —
-      whatever model is behind them.
-    </p>
+    <p class="logos-label">One place for the agents your team already uses</p>
 
     <div class="marquee" data-marquee>
       <div class="marquee-track">
@@ -149,13 +140,6 @@
         </ul>
       </div>
     </div>
-
-    <!-- WCAG 2.2.2: auto-starting motion over 5s needs a stop mechanism, and
-         prefers-reduced-motion alone does not satisfy it. Hidden until app.js
-         actually starts the animation, so it is never a dead control. -->
-    <button class="marquee-toggle" id="marquee-toggle" type="button" aria-pressed="false" hidden>
-      Pause
-    </button>
   </section>
 
   <section class="statement reveal" id="product">

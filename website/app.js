@@ -172,7 +172,6 @@ document.querySelectorAll(".features article").forEach((card) => {
 const marquee = document.querySelector("[data-marquee]");
 const marqueeTrack = marquee?.querySelector(".marquee-track");
 const marqueeRow = marqueeTrack?.querySelector(".marquee-row");
-const marqueeToggle = document.querySelector("#marquee-toggle");
 
 if (marqueeTrack && marqueeRow && !reducedMotion.matches) {
   for (let i = 0; i < 3; i++) {
@@ -182,15 +181,6 @@ if (marqueeTrack && marqueeRow && !reducedMotion.matches) {
     marqueeTrack.append(copy);
   }
   marqueeTrack.dataset.ready = "true";
-
-  if (marqueeToggle) {
-    marqueeToggle.hidden = false;
-    marqueeToggle.addEventListener("click", () => {
-      const paused = marquee.toggleAttribute("data-paused");
-      marqueeToggle.textContent = paused ? "Play" : "Pause";
-      marqueeToggle.setAttribute("aria-pressed", String(paused));
-    });
-  }
 }
 
 // Add the real mark alongside each name once one has been dropped into
