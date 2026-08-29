@@ -1,5 +1,5 @@
 {
-  "name": "@krishaysuresh/inzo",
+  "name": "inzo-cli",
   "version": "0.3.0",
   "description": "Human-side live viewer for an Inzo pairing: watch two agents negotiate, approve the plan, pull the kill switch.",
   "type": "module",

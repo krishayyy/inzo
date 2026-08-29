@@ -99,14 +99,14 @@ Coordination is the feature; the trust boundary is the product.
 **0. Get it.** One of these, once:
 
 ```bash
-npm i -g @krishaysuresh/inzo     # `inzo` on PATH; recommended
-npx @krishaysuresh/inzo start    # zero-install, for a first try
+npm i -g inzo-cli      # `inzo` on PATH; recommended
+npx inzo-cli start     # zero-install, for a first try
 ```
 
-The npm package is scoped because npm's anti-squatting policy rejected the
-plain name `inzo` (too close to ini/ink/intl/minio/pino). Only the thing you
-*install* is scoped — the command you *type* is `inzo`, and the rest of this
-README uses it directly.
+The package is `inzo-cli` because npm's anti-squatting policy rejects the plain
+name `inzo` (too close to ini/ink/intl/minio/pino). The command you *type* is
+still `inzo` — only the thing you install carries the suffix, and it matches
+the rest of the family: `inzo-mcp`, `inzo-holder`, `inzo-sandbox`.
 
 **1. One person starts, from their project directory:**
 

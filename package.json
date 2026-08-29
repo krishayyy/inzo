@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w inzo-protocol && npm run build -w inzo-holder && npm run build -w inzo-sandbox && npm run build -w inzo-relay && npm run build -w inzo-mcp && npm run build -w @krishaysuresh/inzo",
+    "build": "npm run build -w inzo-protocol && npm run build -w inzo-holder && npm run build -w inzo-sandbox && npm run build -w inzo-relay && npm run build -w inzo-mcp && npm run build -w inzo-cli",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run build && npm run test --workspaces --if-present",
     "test:only": "npm run test --workspaces --if-present",

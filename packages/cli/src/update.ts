@@ -21,11 +21,12 @@ const CACHE_PATH = join(process.env.INZO_HOME ?? join(homedir(), ".inzo"), "upda
  * The registry name, which is not what users type.
  *
  * npm's anti-squatting policy rejected the plain name `inzo` as too close to
- * ini/ink/intl/minio/pino, so the package is scoped. The `inzo` bin is
- * unchanged — only the thing you install is named differently from the thing
- * you run.
+ * ini/ink/intl/minio/pino. `inzo-cli` cleared it — it is already on the
+ * registry — and it matches the rest of the family: inzo-mcp, inzo-holder,
+ * inzo-sandbox. The bin stays `inzo`, so only the thing you install is named
+ * differently from the thing you type.
  */
-export const PACKAGE_NAME = "@krishaysuresh/inzo";
+export const PACKAGE_NAME = "inzo-cli";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 interface UpdateCache {
