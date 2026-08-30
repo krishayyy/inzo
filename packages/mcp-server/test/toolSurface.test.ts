@@ -170,3 +170,19 @@ describe("mode policy", () => {
     expect(enforcing).toEqual(["build"]);
   });
 });
+
+describe("run_shared_command timeout cap", () => {
+  it("caps timeoutSeconds at 600, so a sandboxed command cannot run unbounded", async () => {
+    // origin:"self" skips every other authority/consent check on this tool
+    // (see tools.ts), which makes this schema cap the only thing standing
+    // between "run a command" and "run a command forever" for that path.
+    // Regression coverage for the cap being dropped silently in a future
+    // schema-trimming pass.
+    applyModeGating("cowork");
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "run_shared_command");
+    expect(tool).toBeDefined();
+    const schema = tool!.inputSchema?.properties?.timeoutSeconds as { maximum?: number } | undefined;
+    expect(schema?.maximum).toBe(600);
+  });
+});

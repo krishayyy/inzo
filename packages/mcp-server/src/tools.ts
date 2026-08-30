@@ -370,7 +370,7 @@ export function registerTools(server: McpServer): void {
           args: z.array(z.string()).optional(),
           origin: z.string().default("peer"),
           itemIndex: z.number().optional(),
-          timeoutSeconds: z.number().optional(),
+          timeoutSeconds: z.number().positive().max(600).optional().describe("Kill the command after this long"),
         },
       },
       async ({ command, args, origin, itemIndex, timeoutSeconds }) => {
