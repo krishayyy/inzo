@@ -1,6 +1,9 @@
 import { buildAuthHeaders } from "inzo-holder";
-import type { ContextEntry, LedgerStats, Presence, SessionDescriptor } from "inzo-protocol";
+import type { ContextEntry, LedgerStats, Presence, PresenceEntry, SessionDescriptor } from "inzo-protocol";
 import type { SessionFile } from "./session.js";
+
+/** Re-exported so CLI code can keep importing it from ./api.js. */
+export type { PresenceEntry };
 
 export interface ConsentRecord {
   pairingId: string;
@@ -72,20 +75,17 @@ export interface MinePairing {
   /** Per-member scope and revocation. Absent from a pre-N-party relay. */
   memberDetails?: MemberDetail[];
   /** Null for 3+ members: "the other one" stops being well defined. */
-  peerAgentId: string;
+  peerAgentId: string | null;
   budget: { deadline: string | null; tokenBudget: number | null; costBudgetUsd: number | null } | null;
   scope: string[];
-  peerScope: string[];
+  /** Null whenever peerAgentId is null. */
+  peerScope: string[] | null;
   revoked: boolean;
-  peerRevoked: boolean;
+  /** Null whenever peerAgentId is null. */
+  peerRevoked: boolean | null;
 }
 
 /** One member's presence, as the relay serves it. */
-export interface PresenceEntry extends Presence {
-  agentId: string;
-  at: string;
-}
-
 export class ApiError extends Error {
   constructor(
     message: string,
