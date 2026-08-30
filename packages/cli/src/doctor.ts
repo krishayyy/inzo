@@ -66,12 +66,26 @@ export function atLeast(found: [number, number, number] | null, min: [number, nu
 }
 
 export async function runChecks(): Promise<Check[]> {
-  const checks: Check[] = [];
   const workspace = resolveWorkspace();
 
-  // Not required: being a version behind degrades nothing on its own, and
-  // failing doctor over it would cry wolf.
-  const update = await updateStatus(VERSION);
+  // These five don't depend on each other's results — each is its own
+  // subprocess spawn or network call with its own multi-second timeout, so
+  // running them concurrently instead of one after another keeps the total
+  // wait to the slowest single check rather than their sum.
+  const [update, gitVersion, docker, gh, relay] = await Promise.all([
+    // Not required: being a version behind degrades nothing on its own, and
+    // failing doctor over it would cry wolf.
+    updateStatus(VERSION),
+    version("git"),
+    // Optional on purpose: without Docker, coordination is unaffected and
+    // only sandboxed shared commands refuse. Reporting that as a failure
+    // would send people installing Docker to fix a problem they do not have.
+    version("docker"),
+    version("gh"),
+    relayCheck(),
+  ]);
+
+  const checks: Check[] = [];
   checks.push({ name: "inzo", ok: update.ok, required: false, detail: `${update.detail} · mcp pin ${MCP_VERSION}` });
 
   const node = parseSemver(process.version);
@@ -82,7 +96,6 @@ export async function runChecks(): Promise<Check[]> {
     detail: atLeast(node, [20, 0, 0]) ? process.version : `${process.version} — Inzo needs Node 20 or newer`,
   });
 
-  const gitVersion = await version("git");
   const gitOk = atLeast(parseSemver(gitVersion), [2, 30, 0]);
   checks.push({
     name: "git",
@@ -91,10 +104,6 @@ export async function runChecks(): Promise<Check[]> {
     detail: gitVersion ?? "not found on PATH — start, join, sync, and cowork all need it",
   });
 
-  // Optional on purpose: without Docker, coordination is unaffected and only
-  // sandboxed shared commands refuse. Reporting that as a failure would send
-  // people installing Docker to fix a problem they do not have.
-  const docker = await version("docker");
   checks.push({
     name: "docker",
     ok: docker !== null,
@@ -102,7 +111,6 @@ export async function runChecks(): Promise<Check[]> {
     detail: docker ?? "not found — shared commands will refuse; coordination is unaffected",
   });
 
-  const gh = await version("gh");
   checks.push({
     name: "gh",
     ok: gh !== null,
@@ -111,7 +119,7 @@ export async function runChecks(): Promise<Check[]> {
   });
 
   checks.push(capacityCheck());
-  checks.push(await relayCheck());
+  checks.push(relay);
   checks.push(sessionCheck());
   checks.push(mcpConfigCheck(workspace));
 

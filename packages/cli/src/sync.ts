@@ -142,8 +142,15 @@ export async function conflictedPaths(workspace: string): Promise<string[]> {
  * makes presence silently stop updating for the rest of the session.
  */
 export async function readPresence(workspace: string, branch: string, conflicted = false): Promise<Presence> {
-  const head = (await gitOrNull(["rev-parse", "--short", "HEAD"], workspace)) ?? "0000000";
-  const status = (await gitOrNull(["status", "--porcelain"], workspace)) ?? "";
+  // Three independent `git` subprocess spawns — none depends on another's
+  // output — so run them concurrently rather than one after another.
+  const [headResult, statusResult, countsResult] = await Promise.all([
+    gitOrNull(["rev-parse", "--short", "HEAD"], workspace),
+    gitOrNull(["status", "--porcelain"], workspace),
+    gitOrNull(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`], workspace),
+  ]);
+  const head = headResult ?? "0000000";
+  const status = statusResult ?? "";
   const dirty = status
     .split("\n")
     .filter(Boolean)
@@ -156,8 +163,7 @@ export async function readPresence(workspace: string, branch: string, conflicted
     .filter(Boolean)
     .slice(0, MAX_DIRTY_PATHS);
 
-  const counts = await gitOrNull(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`], workspace);
-  const [behind, ahead] = counts ? counts.split(/\s+/).map(Number) : [0, 0];
+  const [behind, ahead] = countsResult ? countsResult.split(/\s+/).map(Number) : [0, 0];
 
   return {
     branch,
