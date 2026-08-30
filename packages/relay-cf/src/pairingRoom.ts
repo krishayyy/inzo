@@ -20,13 +20,13 @@ import {
   modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
-  MAX_LEDGER_BYTES,
-  MAX_LEDGER_ENTRIES,
-  PRESENCE_TTL_MS,
+  LedgerCache,
+  PresenceStore,
   type ContextEntry,
   type ContextInput,
   type LedgerStats,
   type Presence,
+  type PresenceEntry,
   type SessionDescriptor,
 } from "inzo-protocol";
 import { DurableObject } from "cloudflare:workers";
@@ -57,7 +57,7 @@ import {
   type CredentialPayload,
 } from "./lib.js";
 import { rpcSafe, type RpcResult } from "./rpcError.js";
-import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, PresenceEntry, UsageReport, UsageSnapshot } from "./types.js";
+import type { Budget, CombinedUsage, ItemStatus, Message, Pairing, Plan, PlanItem, PlanWithStatus, UsageReport, UsageSnapshot } from "./types.js";
 
 /** Bounds join-spam via repeated per-invite codes on one pairing. Mirrors packages/relay's store.ts. */
 const MAX_MEMBERS = 8;
@@ -401,14 +401,12 @@ export class PairingRoom extends DurableObject<Env> {
    * Every member re-posts on their next change, and the room is already
    * resident whenever anyone is actually watching.
    */
-  private readonly presence = new Map<string, PresenceEntry>();
+  private readonly presenceStore = new PresenceStore();
 
   setPresence(agentId: string, presence: Presence): RpcResult<PresenceEntry> {
     return rpcSafe(() => {
       this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
-      const entry: PresenceEntry = { ...presence, agentId, at: new Date().toISOString() };
-      // Last write wins per member: this is a snapshot of now, not a log.
-      this.presence.set(agentId, entry);
+      const entry = this.presenceStore.set(agentId, presence);
       this.broadcast("presence.updated", { presence: entry });
       return entry;
     });
@@ -418,11 +416,7 @@ export class PairingRoom extends DurableObject<Env> {
   getPresence(agentId: string): RpcResult<PresenceEntry[]> {
     return rpcSafe(() => {
       this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
-      const cutoff = Date.now() - PRESENCE_TTL_MS;
-      for (const [member, entry] of this.presence) {
-        if (Date.parse(entry.at) < cutoff) this.presence.delete(member);
-      }
-      return [...this.presence.values()];
+      return this.presenceStore.list();
     });
   }
 
@@ -431,33 +425,17 @@ export class PairingRoom extends DurableObject<Env> {
   // ---------------------------------------------------------------------
 
   /**
-   * Instance memory, LRU, hard-capped — see the Express relay's note for why
-   * a cache belongs in memory. A Map preserves insertion order, which is all
-   * an LRU needs: re-inserting on read moves an entry to the end.
+   * Instance memory, LRU, hard-capped by `LedgerCache` (shared with the
+   * Express relay via `inzo-protocol`) — see that class for why the eviction
+   * policy lives there rather than here.
    */
-  private readonly ledger = new Map<string, ContextEntry>();
-  private ledgerBytes = 0;
-  private ledgerHits = 0;
-  private ledgerMisses = 0;
+  private readonly ledger = new LedgerCache();
 
   putContext(agentId: string, input: ContextInput): RpcResult<ContextEntry> {
     return rpcSafe(() => {
       this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
       const entry: ContextEntry = { ...input, agentId, at: new Date().toISOString() };
-      const key = contextKey(input.path, input.sha);
-
-      const replacing = this.ledger.get(key);
-      if (replacing) this.ledgerBytes -= replacing.summary.length;
-      this.ledger.delete(key);
-      this.ledger.set(key, entry);
-      this.ledgerBytes += entry.summary.length;
-
-      while (this.ledger.size > MAX_LEDGER_ENTRIES || this.ledgerBytes > MAX_LEDGER_BYTES) {
-        const oldest = this.ledger.keys().next();
-        if (oldest.done) break;
-        this.ledgerBytes -= this.ledger.get(oldest.value)!.summary.length;
-        this.ledger.delete(oldest.value);
-      }
+      this.ledger.put(contextKey(input.path, input.sha), entry);
       return entry;
     });
   }
@@ -470,20 +448,8 @@ export class PairingRoom extends DurableObject<Env> {
   getContext(agentId: string, path: string, sha: string): RpcResult<{ context: ContextEntry | null; stats: LedgerStats }> {
     return rpcSafe(() => {
       this.assertMemberOrThrow(this.getPairingOrThrow(), agentId);
-      const key = contextKey(path, sha);
-      const entry = this.ledger.get(key) ?? null;
-      if (entry) {
-        this.ledgerHits++;
-        // Touch: re-insertion moves it to the end of the LRU order.
-        this.ledger.delete(key);
-        this.ledger.set(key, entry);
-      } else {
-        this.ledgerMisses++;
-      }
-      return {
-        context: entry,
-        stats: { entries: this.ledger.size, bytes: this.ledgerBytes, hits: this.ledgerHits, misses: this.ledgerMisses },
-      };
+      const context = this.ledger.get(contextKey(path, sha));
+      return { context, stats: this.ledger.stats() };
     });
   }
 

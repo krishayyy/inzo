@@ -14,19 +14,18 @@ import {
   modeOnPlanLock,
   parseSessionDescriptor,
   serializeSessionDescriptor,
-  MAX_LEDGER_BYTES,
-  MAX_LEDGER_ENTRIES,
-  PRESENCE_TTL_MS,
+  LedgerCache,
+  PresenceStore,
   type ContextEntry,
   type ContextInput,
   type LedgerStats,
   type Presence,
+  type PresenceEntry,
   type SessionDescriptor,
 } from "inzo-protocol";
 import type { Assurance } from "./audit.js";
 import {
   ALL_SCOPES,
-  type PresenceEntry,
   type Budget,
   type CombinedUsage,
   type Message,
@@ -720,30 +719,24 @@ export class RelayStore {
    * it on restart is correct behavior, not a gap — every member re-posts on
    * their next change.
    */
-  private readonly presence = new Map<string, Map<string, PresenceEntry>>();
+  private readonly presence = new Map<string, PresenceStore>();
 
   setPresence(pairingId: string, agentId: string, presence: Presence): PresenceEntry {
-    const entry: PresenceEntry = { ...presence, agentId, at: new Date().toISOString() };
-    let room = this.presence.get(pairingId);
-    if (!room) {
-      room = new Map();
-      this.presence.set(pairingId, room);
+    let store = this.presence.get(pairingId);
+    if (!store) {
+      store = new PresenceStore();
+      this.presence.set(pairingId, store);
     }
-    // Last write wins per member: this is a snapshot of now, not a log.
-    room.set(agentId, entry);
-    return entry;
+    return store.set(agentId, presence);
   }
 
   /** Live entries only. Expiry is applied on read, so no timer is needed. */
   getPresence(pairingId: string): PresenceEntry[] {
-    const room = this.presence.get(pairingId);
-    if (!room) return [];
-    const cutoff = Date.now() - PRESENCE_TTL_MS;
-    for (const [agentId, entry] of room) {
-      if (Date.parse(entry.at) < cutoff) room.delete(agentId);
-    }
-    if (room.size === 0) this.presence.delete(pairingId);
-    return [...room.values()];
+    const store = this.presence.get(pairingId);
+    if (!store) return [];
+    const entries = store.list();
+    if (store.isEmpty) this.presence.delete(pairingId);
+    return entries;
   }
 
   // ---------------------------------------------------------------------
@@ -751,46 +744,26 @@ export class RelayStore {
   // ---------------------------------------------------------------------
 
   /**
-   * Per pairing, in memory, LRU, and hard-capped.
-   *
-   * In memory because it is a cache: every entry is reconstructible by
-   * re-reading the file, so losing it on restart costs tokens, never
-   * correctness. Capped because an unbounded ledger is a memory leak with a
-   * helpful name, and a Map preserves insertion order, which is all an LRU
-   * needs — re-inserting on read moves an entry to the end.
+   * Per pairing, in memory, LRU, and hard-capped by `LedgerCache` — shared
+   * with the Cloudflare relay via `inzo-protocol` so the two cannot drift on
+   * eviction order. In memory because it is a cache: every entry is
+   * reconstructible by re-reading the file, so losing it on restart costs
+   * tokens, never correctness.
    */
-  private readonly ledger = new Map<string, Map<string, ContextEntry>>();
-  private readonly ledgerBytes = new Map<string, number>();
-  private readonly ledgerHits = new Map<string, { hits: number; misses: number }>();
+  private readonly ledger = new Map<string, LedgerCache>();
 
   putContext(pairingId: string, agentId: string, input: ContextInput): ContextEntry {
     const pairing = this.getPairing(pairingId);
     this.assertMember(pairing, agentId);
 
     const entry: ContextEntry = { ...input, agentId, at: new Date().toISOString() };
-    const key = contextKey(input.path, input.sha);
 
-    let room = this.ledger.get(pairingId);
-    if (!room) {
-      room = new Map();
-      this.ledger.set(pairingId, room);
-      this.ledgerBytes.set(pairingId, 0);
+    let cache = this.ledger.get(pairingId);
+    if (!cache) {
+      cache = new LedgerCache();
+      this.ledger.set(pairingId, cache);
     }
-
-    const replacing = room.get(key);
-    if (replacing) this.ledgerBytes.set(pairingId, (this.ledgerBytes.get(pairingId) ?? 0) - replacing.summary.length);
-    room.delete(key);
-    room.set(key, entry);
-    this.ledgerBytes.set(pairingId, (this.ledgerBytes.get(pairingId) ?? 0) + entry.summary.length);
-
-    // Evict oldest-first until both caps hold.
-    while (room.size > MAX_LEDGER_ENTRIES || (this.ledgerBytes.get(pairingId) ?? 0) > MAX_LEDGER_BYTES) {
-      const oldest = room.keys().next();
-      if (oldest.done) break;
-      const dropped = room.get(oldest.value)!;
-      room.delete(oldest.value);
-      this.ledgerBytes.set(pairingId, (this.ledgerBytes.get(pairingId) ?? 0) - dropped.summary.length);
-    }
+    cache.put(contextKey(input.path, input.sha), entry);
     return entry;
   }
 
@@ -803,28 +776,17 @@ export class RelayStore {
    */
   getContext(pairingId: string, agentId: string, path: string, sha: string): ContextEntry | null {
     this.assertMember(this.getPairing(pairingId), agentId);
-    const room = this.ledger.get(pairingId);
-    const entry = room?.get(contextKey(path, sha));
-    const counts = this.ledgerHits.get(pairingId) ?? { hits: 0, misses: 0 };
-    if (!entry || !room) {
-      this.ledgerHits.set(pairingId, { ...counts, misses: counts.misses + 1 });
-      return null;
+    let cache = this.ledger.get(pairingId);
+    if (!cache) {
+      cache = new LedgerCache();
+      this.ledger.set(pairingId, cache);
     }
-    this.ledgerHits.set(pairingId, { ...counts, hits: counts.hits + 1 });
-    // Touch: re-insertion moves it to the end of the LRU order.
-    room.delete(contextKey(path, sha));
-    room.set(contextKey(path, sha), entry);
-    return entry;
+    return cache.get(contextKey(path, sha));
   }
 
   /** What the ledger holds and has done, for `inzo tokens`. */
   contextStats(pairingId: string): LedgerStats {
-    const counts = this.ledgerHits.get(pairingId) ?? { hits: 0, misses: 0 };
-    return {
-      entries: this.ledger.get(pairingId)?.size ?? 0,
-      bytes: this.ledgerBytes.get(pairingId) ?? 0,
-      ...counts,
-    };
+    return this.ledger.get(pairingId)?.stats() ?? { entries: 0, bytes: 0, hits: 0, misses: 0 };
   }
 
   /** Full membership of a pairing, in join order. */

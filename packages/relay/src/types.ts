@@ -1,6 +1,9 @@
 /** Shared domain types for the relay service. */
 
-import type { SessionDescriptor } from "inzo-protocol";
+import type { PresenceEntry, SessionDescriptor } from "inzo-protocol";
+
+/** Re-exported so relay code can keep importing it from local types. */
+export type { PresenceEntry };
 
 /**
  * Capabilities a token may carry. A token's scope is fixed at issue time to
@@ -179,15 +182,3 @@ export interface UsageSnapshot {
   runway: Runway;
 }
 
-/** One member's presence, as served. Never persisted — see RelayStore. */
-export interface PresenceEntry {
-  agentId: string;
-  branch: string;
-  head: string;
-  dirty: string[];
-  ahead: number;
-  behind: number;
-  conflicted: boolean;
-  /** When this snapshot was posted; drives the 90-second TTL. */
-  at: string;
-}

@@ -336,8 +336,48 @@ export interface Presence {
   capacity?: Capacity | null;
 }
 
+/** A member's presence as the relay serves it back: their post, plus who and when. */
+export interface PresenceEntry extends Presence {
+  agentId: string;
+  /** When this snapshot was posted; drives the 90-second TTL. */
+  at: string;
+}
+
 /** How long a presence entry stays live without a refresh. */
 export const PRESENCE_TTL_MS = 90_000;
+
+/**
+ * Per-pairing presence: last-write-wins per member, expired lazily on read.
+ *
+ * In memory only, and deliberately not in either relay's durable store — see
+ * `LedgerCache` for why a cache-shaped concern belongs here instead of
+ * duplicated per relay. A heartbeat that expires in 90 seconds does not
+ * belong in a durable or tamper-evident record, and losing it on restart is
+ * correct behavior: every member re-posts on their next change.
+ */
+export class PresenceStore {
+  private readonly members = new Map<string, PresenceEntry>();
+
+  set(agentId: string, presence: Presence): PresenceEntry {
+    const entry: PresenceEntry = { ...presence, agentId, at: new Date().toISOString() };
+    // Last write wins per member: this is a snapshot of now, not a log.
+    this.members.set(agentId, entry);
+    return entry;
+  }
+
+  /** Live entries only. Expiry is applied here, so no timer/alarm is needed. */
+  list(): PresenceEntry[] {
+    const cutoff = Date.now() - PRESENCE_TTL_MS;
+    for (const [agentId, entry] of this.members) {
+      if (Date.parse(entry.at) < cutoff) this.members.delete(agentId);
+    }
+    return [...this.members.values()];
+  }
+
+  get isEmpty(): boolean {
+    return this.members.size === 0;
+  }
+}
 
 export const MAX_DIRTY_PATHS = 100;
 export const MAX_PATH_LENGTH = 400;
@@ -545,6 +585,71 @@ export interface LedgerStats {
 /** The ledger key. Two files with the same content share one entry, correctly. */
 export function contextKey(path: string, sha: string): string {
   return `${path}@${sha}`;
+}
+
+/**
+ * The shared context ledger's storage and eviction policy — LRU by count and
+ * by total bytes, both capped.
+ *
+ * Lives here, not in either relay, because the Express relay and the
+ * Cloudflare relay must agree on eviction order byte-for-byte: a summary one
+ * relay would have evicted and the other kept is exactly the kind of protocol
+ * drift `inzo-protocol` exists to prevent. The Express relay holds one
+ * `LedgerCache` per pairing; the Cloudflare relay's Durable Object is already
+ * scoped to a single pairing, so it holds exactly one.
+ *
+ * A Map preserves insertion order, which is all an LRU needs — re-inserting
+ * on read (`get`) moves an entry to the end.
+ */
+export class LedgerCache {
+  private readonly entries = new Map<string, ContextEntry>();
+  private bytes = 0;
+  private hits = 0;
+  private misses = 0;
+
+  put(key: string, entry: ContextEntry): void {
+    const replacing = this.entries.get(key);
+    if (replacing) this.bytes -= replacing.summary.length;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    this.bytes += entry.summary.length;
+
+    // Evict oldest-first until both caps hold.
+    while (this.entries.size > MAX_LEDGER_ENTRIES || this.bytes > MAX_LEDGER_BYTES) {
+      const oldest = this.entries.keys().next();
+      if (oldest.done) break;
+      const dropped = this.entries.get(oldest.value)!;
+      this.entries.delete(oldest.value);
+      this.bytes -= dropped.summary.length;
+    }
+  }
+
+  /**
+   * Returns an entry only when the caller supplies the exact key it was
+   * stored under (`contextKey(path, sha)`) — a stale sha is simply a miss,
+   * counted as such.
+   */
+  get(key: string): ContextEntry | null {
+    const entry = this.entries.get(key);
+    if (!entry) {
+      this.misses++;
+      return null;
+    }
+    this.hits++;
+    // Touch: re-insertion moves it to the end of the LRU order.
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  /** What the ledger holds and has done, for `inzo tokens`. */
+  stats(): LedgerStats {
+    return { entries: this.entries.size, bytes: this.bytes, hits: this.hits, misses: this.misses };
+  }
 }
 
 // ---------------------------------------------------------------------------
